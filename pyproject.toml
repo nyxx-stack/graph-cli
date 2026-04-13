@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daf-graph-cli"
+version = "0.1.0"
+description = "Microsoft Graph CLI for CMMC L2 Intune/Entra management"
+requires-python = ">=3.12"
+dependencies = [
+    "msgraph-sdk>=1.55.0,<2",
+    "azure-identity>=1.25.0,<2",
+    "typer>=0.15.0,<1",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "rapidfuzz>=3.0",
+]
+
+[project.scripts]
+graph = "graph_cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]

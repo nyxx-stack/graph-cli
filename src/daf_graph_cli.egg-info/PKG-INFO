@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: daf-graph-cli
+Version: 0.1.0
+Summary: Microsoft Graph CLI for CMMC L2 Intune/Entra management
+Requires-Python: >=3.12
+Requires-Dist: msgraph-sdk<2,>=1.55.0
+Requires-Dist: azure-identity<2,>=1.25.0
+Requires-Dist: typer<1,>=0.15.0
+Requires-Dist: rich>=13.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: pydantic>=2.0
+Requires-Dist: rapidfuzz>=3.0

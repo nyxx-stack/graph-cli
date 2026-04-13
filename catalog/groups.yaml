@@ -1,0 +1,89 @@
+operations:
+  - id: "groups.list_all"
+    summary: "List Entra security groups"
+    description: >
+      Returns security groups in the tenant. Use name_contains to filter
+      to DAF targeting groups (DAF - Corp-Win11, DAF - Users - CUI, etc).
+    domain: "groups"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/groups"
+    api_version: "v1.0"
+    graph_permissions:
+      - "Group.Read.All"
+    parameters:
+      - name: "name_contains"
+        type: "string"
+        required: false
+        description: "Filter group display name (startsWith)"
+        maps_to_filter: "startswith(displayName, '{value}')"
+    default_select:
+      - "id"
+      - "displayName"
+      - "description"
+      - "groupTypes"
+      - "membershipRule"
+      - "membershipRuleProcessingState"
+    default_filter: "securityEnabled eq true"
+    default_orderby: "displayName asc"
+    tags: ["groups", "targeting", "assignment", "security group"]
+    cmmc_controls: ["AC.L2-3.1.1"]
+    examples:
+      - description: "All DAF groups"
+        parameters: {"name_contains": "DAF"}
+
+  - id: "groups.list_members"
+    summary: "List members of a specific group"
+    description: >
+      Returns user and device members of a group. Use to verify
+      DAF targeting group membership is correct for policy assignments.
+    domain: "groups"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/groups/{group_id}/members"
+    api_version: "v1.0"
+    graph_permissions:
+      - "GroupMember.Read.All"
+    parameters:
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Entra group object ID"
+    default_select:
+      - "id"
+      - "displayName"
+      - "userPrincipalName"
+      - "@odata.type"
+    tags: ["members", "membership", "group", "targeting"]
+    cmmc_controls: ["AC.L2-3.1.1"]
+    examples:
+      - description: "Members of a specific group"
+        parameters: {"group_id": "<group-object-id>"}
+
+  - id: "groups.add_member"
+    summary: "Add a user or device to a group"
+    description: >
+      Adds a directory object (user or device) as a member of the specified group.
+      Use for updating Intune targeting group membership. Requires
+      GroupMember.ReadWrite.All and Device.Read.All when adding devices.
+    domain: "groups"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/groups/{group_id}/members/$ref"
+    api_version: "v1.0"
+    graph_permissions:
+      - "GroupMember.ReadWrite.All"
+      - "Device.Read.All"
+    parameters:
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target group object ID"
+      - name: "member_id"
+        type: "string"
+        required: true
+        description: "User or device object ID to add"
+    body_template:
+      "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{member_id}"
+    tags: ["add", "member", "group", "assignment"]
+    cmmc_controls: ["AC.L2-3.1.1"]

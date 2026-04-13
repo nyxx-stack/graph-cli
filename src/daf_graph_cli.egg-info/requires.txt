@@ -1,0 +1,7 @@
+msgraph-sdk<2,>=1.55.0
+azure-identity<2,>=1.25.0
+typer<1,>=0.15.0
+rich>=13.0
+pyyaml>=6.0
+pydantic>=2.0
+rapidfuzz>=3.0

@@ -1,0 +1,125 @@
+operations:
+  - id: "devices.list_managed"
+    summary: "List all Intune-managed devices"
+    description: >
+      Returns all devices enrolled in Intune MDM. Core fleet inventory query
+      for compliance reporting, enrollment drift detection, and device lifecycle.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "os_filter"
+        type: "string"
+        required: false
+        description: "Filter by OS (e.g., 'Windows')"
+        maps_to_filter: "operatingSystem eq '{value}'"
+    default_select:
+      - "id"
+      - "deviceName"
+      - "operatingSystem"
+      - "osVersion"
+      - "complianceState"
+      - "lastSyncDateTime"
+      - "enrolledDateTime"
+      - "managementAgent"
+      - "userPrincipalName"
+    default_orderby: "deviceName asc"
+    tags: ["inventory", "fleet", "enrollment", "mdm", "managed"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+    examples:
+      - description: "List all Windows devices"
+        parameters: {"os_filter": "Windows"}
+      - description: "List devices sorted by last sync"
+
+  - id: "devices.list_stale"
+    summary: "List devices with no Intune check-in within N days"
+    description: >
+      Finds managed devices whose lastSyncDateTime is older than the specified
+      threshold. Critical for enrollment drift detection and stale device cleanup.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "days_inactive"
+        type: "integer"
+        required: true
+        description: "Number of days since last sync to consider stale"
+        default: 30
+    default_select:
+      - "id"
+      - "deviceName"
+      - "userPrincipalName"
+      - "lastSyncDateTime"
+      - "operatingSystem"
+      - "osVersion"
+      - "complianceState"
+    default_orderby: "lastSyncDateTime asc"
+    computed_filter: "lastSyncDateTime le {cutoff_datetime}"
+    tags: ["stale", "inactive", "drift", "cleanup", "sync"]
+    cmmc_controls: ["CM.L2-3.4.1"]
+    examples:
+      - description: "Devices not synced in 30 days"
+        parameters: {"days_inactive": "30"}
+      - description: "Devices not synced in 90 days"
+        parameters: {"days_inactive": "90"}
+
+  - id: "devices.compliance_status"
+    summary: "List device compliance states (compliant, noncompliant, unknown)"
+    description: >
+      Returns compliance posture for managed devices. Filter by specific state
+      to find noncompliant or unknown devices. Directly supports CMMC evidence.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "state"
+        type: "string"
+        required: false
+        description: "Filter by compliance state"
+        enum: ["compliant", "noncompliant", "unknown", "notApplicable", "inGracePeriod", "error"]
+        maps_to_filter: "complianceState eq '{value}'"
+    default_select:
+      - "id"
+      - "deviceName"
+      - "complianceState"
+      - "lastSyncDateTime"
+      - "operatingSystem"
+      - "userPrincipalName"
+    tags: ["compliance", "posture", "noncompliant", "health"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "CA.L2-3.12.1"]
+    examples:
+      - description: "All noncompliant devices"
+        parameters: {"state": "noncompliant"}
+
+  - id: "devices.sync_device"
+    summary: "Trigger Intune sync on a specific managed device"
+    description: >
+      Sends a sync request to a managed device so it checks in with Intune
+      and receives the latest policies. Non-destructive write operation.
+      Requires PrivilegedOperations.All permission.
+    domain: "devices"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/syncDevice"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.PrivilegedOperations.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managed device ID"
+    tags: ["sync", "checkin", "policy", "refresh"]
+    cmmc_controls: ["CM.L2-3.4.2"]

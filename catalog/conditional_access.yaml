@@ -1,0 +1,43 @@
+operations:
+  - id: "conditional_access.list_policies"
+    summary: "List all Conditional Access policies"
+    description: >
+      Returns all Conditional Access policies with state (enabled/disabled/
+      report-only), conditions, and grant controls. Key for MFA enforcement
+      and zero-trust evidence.
+    domain: "conditional_access"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/identity/conditionalAccess/policies"
+    api_version: "v1.0"
+    graph_permissions:
+      - "Policy.Read.All"
+    default_select:
+      - "id"
+      - "displayName"
+      - "state"
+      - "conditions"
+      - "grantControls"
+      - "modifiedDateTime"
+    tags: ["conditional access", "ca", "mfa", "enforcement", "policy", "zero trust"]
+    cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]
+
+  - id: "conditional_access.policy_detail"
+    summary: "Get full details for a specific Conditional Access policy"
+    description: >
+      Returns the complete CA policy including all conditions, grant controls,
+      session controls, and included/excluded users and groups.
+    domain: "conditional_access"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    api_version: "v1.0"
+    graph_permissions:
+      - "Policy.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Conditional Access policy ID"
+    tags: ["conditional access", "ca", "detail", "policy"]
+    cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]

@@ -1,0 +1,88 @@
+managedDevice:
+  description: "Intune-managed device"
+  properties:
+    id: {type: "string", description: "Device ID"}
+    deviceName: {type: "string", description: "Device name"}
+    operatingSystem: {type: "string", description: "OS type (Windows, iOS, etc.)"}
+    osVersion: {type: "string", description: "OS version string"}
+    complianceState: {type: "string", description: "compliant, noncompliant, unknown, etc."}
+    lastSyncDateTime: {type: "dateTimeOffset", description: "Last Intune check-in time"}
+    enrolledDateTime: {type: "dateTimeOffset", description: "Enrollment date"}
+    managementAgent: {type: "string", description: "Management channel (mdm, eas, etc.)"}
+    userPrincipalName: {type: "string", description: "Primary user UPN"}
+    deviceEnrollmentType: {type: "string", description: "How the device was enrolled"}
+    isEncrypted: {type: "boolean", description: "Whether device storage is encrypted"}
+    model: {type: "string", description: "Device model"}
+    manufacturer: {type: "string", description: "Device manufacturer"}
+    serialNumber: {type: "string", description: "Device serial number"}
+    totalStorageSpaceInBytes: {type: "int64", description: "Total storage"}
+    freeStorageSpaceInBytes: {type: "int64", description: "Free storage"}
+  relationships:
+    deviceCompliancePolicyStates: {type: "collection", target: "deviceCompliancePolicyState"}
+    deviceConfigurationStates: {type: "collection", target: "deviceConfigurationState"}
+
+user:
+  description: "Entra ID user"
+  properties:
+    id: {type: "string", description: "User object ID"}
+    displayName: {type: "string", description: "Display name"}
+    userPrincipalName: {type: "string", description: "UPN (email format)"}
+    accountEnabled: {type: "boolean", description: "Whether account is active"}
+    userType: {type: "string", description: "Member or Guest"}
+    createdDateTime: {type: "dateTimeOffset", description: "Account creation date"}
+    jobTitle: {type: "string", description: "Job title"}
+    department: {type: "string", description: "Department"}
+    officeLocation: {type: "string", description: "Office location"}
+  relationships:
+    memberOf: {type: "collection", target: "directoryObject"}
+    directReports: {type: "collection", target: "directoryObject"}
+
+group:
+  description: "Entra ID security group"
+  properties:
+    id: {type: "string", description: "Group object ID"}
+    displayName: {type: "string", description: "Group display name"}
+    description: {type: "string", description: "Group description"}
+    groupTypes: {type: "collection(string)", description: "Group type indicators"}
+    securityEnabled: {type: "boolean", description: "Whether this is a security group"}
+    membershipRule: {type: "string", description: "Dynamic membership rule (if dynamic)"}
+    membershipRuleProcessingState: {type: "string", description: "On or Paused"}
+    createdDateTime: {type: "dateTimeOffset", description: "Group creation date"}
+  relationships:
+    members: {type: "collection", target: "directoryObject"}
+    owners: {type: "collection", target: "directoryObject"}
+
+deviceCompliancePolicy:
+  description: "Intune compliance policy"
+  properties:
+    id: {type: "string", description: "Policy ID"}
+    displayName: {type: "string", description: "Policy name"}
+    description: {type: "string", description: "Policy description"}
+    createdDateTime: {type: "dateTimeOffset", description: "Created date"}
+    lastModifiedDateTime: {type: "dateTimeOffset", description: "Last modified date"}
+    version: {type: "int32", description: "Policy version"}
+
+deviceConfiguration:
+  description: "Intune device configuration profile"
+  properties:
+    id: {type: "string", description: "Profile ID"}
+    displayName: {type: "string", description: "Profile name"}
+    description: {type: "string", description: "Profile description"}
+    createdDateTime: {type: "dateTimeOffset", description: "Created date"}
+    lastModifiedDateTime: {type: "dateTimeOffset", description: "Last modified date"}
+    version: {type: "int32", description: "Profile version"}
+  relationships:
+    assignments: {type: "collection", target: "deviceConfigurationAssignment"}
+    deviceStatuses: {type: "collection", target: "deviceConfigurationDeviceStatus"}
+
+conditionalAccessPolicy:
+  description: "Entra Conditional Access policy"
+  properties:
+    id: {type: "string", description: "Policy ID"}
+    displayName: {type: "string", description: "Policy name"}
+    state: {type: "string", description: "enabled, disabled, or enabledForReportingButNotEnforced"}
+    conditions: {type: "conditionalAccessConditionSet", description: "Policy conditions"}
+    grantControls: {type: "conditionalAccessGrantControls", description: "Grant controls (MFA, compliant device, etc.)"}
+    sessionControls: {type: "conditionalAccessSessionControls", description: "Session controls"}
+    createdDateTime: {type: "dateTimeOffset", description: "Created date"}
+    modifiedDateTime: {type: "dateTimeOffset", description: "Last modified date"}

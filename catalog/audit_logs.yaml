@@ -1,0 +1,72 @@
+operations:
+  - id: "audit.directory_logs"
+    summary: "Query Entra directory audit logs"
+    description: >
+      Returns audit log entries for directory operations (user, group, device,
+      app changes). Supports date range and category filtering. 30-day
+      retention on Entra P1/P2.
+    domain: "audit_logs"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/auditLogs/directoryAudits"
+    api_version: "v1.0"
+    graph_permissions:
+      - "AuditLog.Read.All"
+    parameters:
+      - name: "category"
+        type: "string"
+        required: false
+        description: "Filter by audit category"
+        enum:
+          - "Device"
+          - "UserManagement"
+          - "GroupManagement"
+          - "ApplicationManagement"
+          - "RoleManagement"
+          - "Policy"
+        maps_to_filter: "category eq '{value}'"
+    default_select:
+      - "id"
+      - "activityDisplayName"
+      - "activityDateTime"
+      - "initiatedBy"
+      - "targetResources"
+      - "result"
+    default_orderby: "activityDateTime desc"
+    tags: ["audit", "logs", "changes", "activity", "history", "trail"]
+    cmmc_controls: ["AU.L2-3.3.1", "AU.L2-3.3.3"]
+    examples:
+      - description: "Device-related audit events"
+        parameters: {"category": "Device"}
+      - description: "User management changes"
+        parameters: {"category": "UserManagement"}
+
+  - id: "audit.sign_in_logs"
+    summary: "Query Entra sign-in logs"
+    description: >
+      Returns user sign-in activity including success/failure, MFA status,
+      and conditional access evaluation. Limited to 30 days on P1/P2.
+    domain: "audit_logs"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/auditLogs/signIns"
+    api_version: "v1.0"
+    graph_permissions:
+      - "AuditLog.Read.All"
+    parameters:
+      - name: "status_filter"
+        type: "string"
+        required: false
+        description: "Filter by sign-in result (success/failure)"
+        enum: ["success", "failure"]
+    default_select:
+      - "id"
+      - "userDisplayName"
+      - "userPrincipalName"
+      - "appDisplayName"
+      - "status"
+      - "conditionalAccessStatus"
+      - "createdDateTime"
+    default_orderby: "createdDateTime desc"
+    tags: ["sign-in", "login", "authentication", "failed", "mfa", "conditional access"]
+    cmmc_controls: ["AU.L2-3.3.1", "AC.L2-3.1.8"]

@@ -1,0 +1,166 @@
+operations:
+  - id: "policies.list_config_profiles"
+    summary: "List Intune device configuration profiles"
+    description: >
+      Returns all configuration profiles with platform and assignment info.
+      Use for policy inventory, naming audit, and deployment tracking.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceConfigurations"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    default_select:
+      - "id"
+      - "displayName"
+      - "description"
+      - "lastModifiedDateTime"
+      - "createdDateTime"
+      - "@odata.type"
+    default_orderby: "displayName asc"
+    tags: ["profiles", "configuration", "policies", "intune", "settings"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.profile_assignments"
+    summary: "List group assignments for a configuration profile"
+    description: >
+      Shows which groups a configuration profile is assigned to.
+      Verify policy targeting matches the DAF group structure.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}/assignments"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Configuration profile ID"
+    tags: ["assignments", "targeting", "groups", "profile"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.profile_device_status"
+    summary: "List per-device deployment status for a configuration profile"
+    description: >
+      Shows Succeeded/Failed/Pending/Error status per device for a specific
+      profile. Essential for rollout tracking.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}/deviceStatuses"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Configuration profile ID"
+    default_select:
+      - "id"
+      - "deviceDisplayName"
+      - "status"
+      - "lastReportedDateTime"
+      - "userPrincipalName"
+    tags: ["deployment", "status", "rollout", "succeeded", "failed", "pending"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+    examples:
+      - description: "Status of a specific profile"
+        parameters: {"profile_id": "<profile-id>"}
+
+  - id: "policies.profile_settings"
+    summary: "Read setting details for a device configuration profile"
+    description: >
+      Returns the full configuration profile object including all settings.
+      Needed for CMMC evidence to show exactly what settings are configured
+      (e.g., session lock timeout, BitLocker settings, password requirements).
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Configuration profile ID"
+    tags: ["settings", "details", "evidence", "configuration"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "AC.L2-3.1.10"]
+
+  - id: "policies.list_compliance_policies"
+    summary: "List Intune device compliance policies"
+    description: >
+      Returns all compliance policies configured in the tenant.
+      Shows enforcement rules like password length, encryption requirements.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    default_select:
+      - "id"
+      - "displayName"
+      - "description"
+      - "lastModifiedDateTime"
+      - "createdDateTime"
+      - "@odata.type"
+    default_orderby: "displayName asc"
+    tags: ["compliance", "policy", "enforcement", "password", "encryption"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.compliance_policy_settings"
+    summary: "Read compliance policy settings (password length, encryption, etc.)"
+    description: >
+      Returns the full compliance policy object including all configured settings.
+      Use to verify password requirements, encryption enforcement, and other
+      compliance rules match CMMC requirements.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Compliance policy ID"
+    tags: ["compliance", "settings", "password", "encryption", "evidence"]
+    cmmc_controls: ["CM.L2-3.4.1", "IA.L2-3.5.7"]
+
+  - id: "policies.list_security_baselines"
+    summary: "List security baseline profiles (BETA)"
+    description: >
+      Returns endpoint security baseline profiles. Note: this uses the /beta
+      API and the deviceManagement/templates endpoint which may change.
+      Requires DeviceManagementSecurity.Read.All or DeviceManagementConfiguration.Read.All.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/templates"
+    api_version: "beta"
+    beta: true
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "template_type"
+        type: "string"
+        required: false
+        description: "Filter by template type"
+        maps_to_filter: "templateType eq '{value}'"
+    default_select:
+      - "id"
+      - "displayName"
+      - "description"
+      - "templateType"
+      - "publishedDateTime"
+    tags: ["baseline", "security", "template", "endpoint security"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "SC.L2-3.13.1"]

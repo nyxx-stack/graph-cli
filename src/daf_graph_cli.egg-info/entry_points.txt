@@ -1,0 +1,2 @@
+[console_scripts]
+graph = graph_cli.main:app

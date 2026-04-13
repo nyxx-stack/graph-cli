@@ -1,0 +1,15 @@
+operations:
+  - id: "compliance.overall_summary"
+    summary: "Get tenant-wide device compliance summary counts"
+    description: >
+      Returns aggregate counts of compliant, noncompliant, in-grace-period,
+      and unknown devices. Quick compliance posture dashboard.
+    domain: "compliance"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicyDeviceStateSummary"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    tags: ["compliance", "summary", "dashboard", "posture", "aggregate"]
+    cmmc_controls: ["CM.L2-3.4.1", "CA.L2-3.12.1"]

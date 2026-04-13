@@ -1,0 +1,93 @@
+operations:
+  - id: "users.list_privileged"
+    summary: "List users with privileged Entra directory roles"
+    description: >
+      Returns active directory role assignments. Use to audit Global Admin,
+      Intune Admin, Security Admin, and other privileged role holders.
+      Key for least-privilege and access review evidence.
+    domain: "users"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/directoryRoles"
+    api_version: "v1.0"
+    graph_permissions:
+      - "Directory.Read.All"
+      - "RoleManagement.Read.Directory"
+    default_select:
+      - "id"
+      - "displayName"
+      - "roleTemplateId"
+    tags: ["privileged", "admin", "roles", "access review", "least privilege"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.5"]
+    examples:
+      - description: "List all active directory roles and their members"
+
+  - id: "users.mfa_status"
+    summary: "Check MFA registration and enforcement status for users"
+    description: >
+      Returns authentication method registration details per user from the
+      reports endpoint. Shows who has MFA registered (Authenticator, FIDO2, phone)
+      and who has not. Essential for IA.L2-3.5.3 evidence.
+      Uses /reports/authenticationMethods/userRegistrationDetails (requires AuditLog.Read.All).
+    domain: "users"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/reports/authenticationMethods/userRegistrationDetails"
+    api_version: "v1.0"
+    graph_permissions:
+      - "AuditLog.Read.All"
+    parameters:
+      - name: "mfa_registered"
+        type: "string"
+        required: false
+        description: "Filter to users who have (true) or have not (false) registered MFA"
+        enum: ["true", "false"]
+        maps_to_filter: "isMfaRegistered eq {value}"
+    default_select:
+      - "id"
+      - "userPrincipalName"
+      - "userDisplayName"
+      - "isMfaRegistered"
+      - "isMfaCapable"
+      - "methodsRegistered"
+    tags: ["mfa", "authentication", "multi-factor", "authenticator", "enforcement"]
+    cmmc_controls: ["IA.L2-3.5.3"]
+    examples:
+      - description: "Users without MFA registered"
+        parameters: {"mfa_registered": "false"}
+      - description: "All users with MFA status"
+
+  - id: "users.list_all"
+    summary: "List all Entra ID users"
+    description: >
+      Returns all users in the tenant directory. Filter by account enabled
+      status or user type for access review and account management.
+    domain: "users"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/users"
+    api_version: "v1.0"
+    graph_permissions:
+      - "User.Read.All"
+    parameters:
+      - name: "account_enabled"
+        type: "string"
+        required: false
+        description: "Filter by account enabled (true/false)"
+        enum: ["true", "false"]
+        maps_to_filter: "accountEnabled eq {value}"
+    default_select:
+      - "id"
+      - "displayName"
+      - "userPrincipalName"
+      - "accountEnabled"
+      - "userType"
+      - "createdDateTime"
+    default_orderby: "displayName asc"
+    tags: ["users", "directory", "identity", "accounts"]
+    cmmc_controls: ["AC.L2-3.1.1"]
+    examples:
+      - description: "All enabled users"
+        parameters: {"account_enabled": "true"}
+      - description: "All disabled accounts"
+        parameters: {"account_enabled": "false"}

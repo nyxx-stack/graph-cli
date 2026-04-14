@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as json_lib
+from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
 import typer
@@ -355,6 +356,13 @@ def read_operation(
         )
 
     parameters = _merge_params(param, params_json, fmt=fmt)
+    parameters, select, filter_expr, expand, order_by = _extract_read_query_controls(
+        parameters,
+        select=select,
+        filter_expr=filter_expr,
+        expand=expand,
+        order_by=order_by,
+    )
     select_fields = [field.strip() for field in select.split(",")] if select else None
     try:
         result = asyncio.run(
@@ -608,8 +616,19 @@ def _parse_json_arg(raw: str | None, *, flag: str, fmt: str) -> Any:
     """Parse an optional JSON flag value, failing the CLI with a usage error on bad JSON."""
     if raw is None:
         return None
+    payload = raw
+    if raw.startswith("@"):
+        path = Path(raw[1:]).expanduser()
+        if not path.is_file():
+            _fail(
+                ErrorCode.USAGE_ERROR,
+                f"{flag} file not found: {path}",
+                hint=f"Use {flag} @<path-to-json-file>",
+                fmt=fmt,
+            )
+        payload = path.read_text(encoding="utf-8")
     try:
-        return json_lib.loads(raw)
+        return json_lib.loads(payload)
     except json_lib.JSONDecodeError as exc:
         _fail(ErrorCode.USAGE_ERROR, f"{flag} is not valid JSON: {exc}", fmt=fmt, cause=exc)
 
@@ -630,6 +649,37 @@ def _merge_params(
             )
         merged.update(parsed)
     return merged
+
+
+def _extract_read_query_controls(
+    parameters: dict[str, Any],
+    *,
+    select: str | None,
+    filter_expr: str | None,
+    expand: str | None,
+    order_by: str | None,
+) -> tuple[dict[str, Any], str | None, str | None, str | None, str | None]:
+    """Promote reserved query controls from --param/--params-json into read() options.
+
+    This makes shell and agent usage less brittle because callers often pass
+    `filter=...` or `orderby=...` through the generic parameter surface instead
+    of dedicated Typer flags.
+    """
+    remaining = dict(parameters)
+
+    if select is None and "select" in remaining:
+        select = str(remaining.pop("select"))
+    if filter_expr is None and "filter" in remaining:
+        filter_expr = str(remaining.pop("filter"))
+    if expand is None and "expand" in remaining:
+        expand = str(remaining.pop("expand"))
+    if order_by is None:
+        if "orderby" in remaining:
+            order_by = str(remaining.pop("orderby"))
+        elif "order_by" in remaining:
+            order_by = str(remaining.pop("order_by"))
+
+    return remaining, select, filter_expr, expand, order_by
 
 
 def _parameters_to_jsonschema(entry: Any) -> dict[str, Any]:

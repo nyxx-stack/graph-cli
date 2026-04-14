@@ -73,7 +73,10 @@ try {{
                         StatusCodeVariable = 'statusCode'
                         ResponseHeadersVariable = 'responseHeaders'
                     }}
-                    if ($null -ne $cmd.body) {{ $params.Body = $cmd.body }}
+                    if ($null -ne $cmd.body) {{
+                        $params.Body = ($cmd.body | ConvertTo-Json -Compress -Depth 64)
+                        $params.ContentType = 'application/json'
+                    }}
                     if ($null -ne $cmd.headers) {{
                         $ht = @{{}}
                         foreach ($p in $cmd.headers.PSObject.Properties) {{ $ht[$p.Name] = $p.Value }}

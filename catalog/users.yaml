@@ -78,6 +78,7 @@ operations:
     method: "GET"
     endpoint: "/users"
     api_version: "v1.0"
+    advanced_query: true
     graph_permissions:
       - "User.Read.All"
     parameters:

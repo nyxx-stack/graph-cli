@@ -168,6 +168,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
     api_version: "v1.0"
+    singleton: true
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     parameters:
@@ -177,6 +178,31 @@ operations:
         description: "Configuration profile ID"
     tags: ["settings", "details", "evidence", "configuration"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "AC.L2-3.1.10"]
+
+  - id: "policies.settings_catalog_settings"
+    aliases: ["policies.sc_settings", "policies.configuration_policy_settings"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
+    summary: "Read setting details for a Settings Catalog policy"
+    description: >
+      Returns the setting instances for a modern Settings Catalog configuration
+      policy from /deviceManagement/configurationPolicies/{policy_id}/settings.
+      Use this to inspect specific Device Control, App Control, SmartScreen,
+      or other modern policy settings when assignment alone is not enough.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}/settings"
+    api_version: "beta"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+    tags: ["settings", "details", "evidence", "configuration", "settings-catalog"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.list_compliance_policies"
     aliases: ["policies.compliance_policies"]
@@ -637,6 +663,74 @@ operations:
         required: true
         description: "Classic configuration profile ID"
     tags: ["configuration", "profile", "assign", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.create_config_profile_assignment"
+    aliases: ["policies.config_profile_assignment_create", "policies.add_config_profile_assignment"]
+    rate_limit_class: "standard"
+    summary: "Create a direct group assignment on a classic Intune configuration profile"
+    description: >
+      Creates a single assignment object under
+      /deviceManagement/deviceConfigurations/{profile_id}/assignments using a
+      groupAssignmentTarget. Prefer this when you need contained add/remove
+      operations instead of building the full assign-action payload yourself.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}/assignments"
+    preview_lookup_endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Classic configuration profile ID"
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target Entra group ID"
+    body_template:
+      "@odata.type": "#microsoft.graph.deviceConfigurationAssignment"
+      target:
+        "@odata.type": "microsoft.graph.groupAssignmentTarget"
+        groupId: "{group_id}"
+    tags: ["configuration", "profile", "assignment", "create", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.delete_config_profile_assignment"
+    aliases: ["policies.config_profile_assignment_delete", "policies.remove_config_profile_assignment"]
+    rate_limit_class: "standard"
+    summary: "Delete a direct assignment from a classic Intune configuration profile"
+    description: >
+      Deletes a specific assignment object from
+      /deviceManagement/deviceConfigurations/{profile_id}/assignments/{assignment_id}.
+      Use policies.profile_assignments first to discover the assignment ID.
+    domain: "policies"
+    safety_tier: "write"
+    method: "DELETE"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}/assignments/{assignment_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Classic configuration profile ID"
+      - name: "assignment_id"
+        type: "string"
+        required: true
+        description: "Classic profile assignment ID"
+    tags: ["configuration", "profile", "assignment", "delete", "intune", "classic"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
   - id: "policies.list_intent_profiles"

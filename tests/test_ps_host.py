@@ -6,6 +6,7 @@ import textwrap
 from pathlib import Path
 
 from graphconnect._ps_host import GraphPowerShellHost
+from graphconnect._ps_host import _build_host_script
 
 
 FAKE_HOST_SCRIPT = """
@@ -145,3 +146,10 @@ def test_host_close_stops_process(tmp_path):
 
     assert host._process is None
     assert process.poll() is not None
+
+
+def test_host_script_serializes_body_to_json_for_graph_requests():
+    script = _build_host_script(required_scopes=[])
+
+    assert "ConvertTo-Json -Compress -Depth 64" in script
+    assert "$params.ContentType = 'application/json'" in script

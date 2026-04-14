@@ -112,6 +112,39 @@ operations:
       - description: "All noncompliant devices"
         parameters: {"state": "noncompliant"}
 
+  - id: "devices.configuration_states"
+    aliases: ["devices.config_states", "devices.device_configuration_states"]
+    rate_limit_class: "standard"
+    summary: "List Intune configuration states reported by a managed device"
+    description: >
+      Returns per-profile configuration state rows for a specific managed device
+      from /deviceManagement/managedDevices/{device_id}/deviceConfigurationStates.
+      Use this to confirm whether a profile is still landing on a device after
+      assignment changes or sync actions.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/deviceConfigurationStates"
+    api_version: "beta"
+    beta: true
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managed device ID"
+    default_select:
+      - "id"
+      - "displayName"
+      - "state"
+      - "platformType"
+      - "version"
+      - "settingCount"
+      - "userPrincipalName"
+    tags: ["configuration", "state", "device", "policy", "intune", "troubleshooting"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
   - id: "devices.sync_device"
     aliases: ["devices.sync"]
     rate_limit_class: "standard"

@@ -20,5 +20,8 @@ dependencies = [
 [project.scripts]
 graph = "graph_cli.main:app"
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

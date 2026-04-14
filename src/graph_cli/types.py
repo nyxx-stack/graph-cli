@@ -27,6 +27,37 @@ class AuthMethod(str, Enum):
     AZURE_POWERSHELL = "azure_powershell"
 
 
+class ErrorCode(str, Enum):
+    """Semantic error codes mapping to POSIX-style exit codes.
+
+    Exit code mapping (see output.exit_for_code):
+      usage_error=2, not_found=3, permission_denied=4, conflict=5, throttled=6, unknown=1
+    """
+
+    USAGE_ERROR = "usage_error"
+    NOT_FOUND = "not_found"
+    PERMISSION_DENIED = "permission_denied"
+    CONFLICT = "conflict"
+    THROTTLED = "throttled"
+    AUTH_REQUIRED = "auth_required"
+    BAD_REQUEST = "bad_request"
+    TOKEN_INVALID = "token_invalid"
+    TOKEN_EXPIRED = "token_expired"
+    WRONG_TIER = "wrong_tier"
+    UNKNOWN = "unknown"
+
+
+class ErrorPayload(BaseModel):
+    """Structured error object emitted on stderr (JSON mode) or rendered (TTY mode)."""
+
+    code: ErrorCode
+    message: str
+    hint: str | None = None
+    retryable: bool = False
+    http_status: int | None = None
+    graph_error_code: str | None = None
+
+
 class CatalogParameter(BaseModel):
     name: str
     type: str = "string"
@@ -67,14 +98,50 @@ class CatalogEntry(BaseModel):
     singleton: bool = False
     supports_top: bool = True
     advanced_query: bool = False
+    aliases: list[str] = Field(default_factory=list)
+    response_schema: str | None = None  # Key into catalog/_schemas.yaml
+    rate_limit_class: str | None = None  # Free-form tag: light|standard|heavy|throttle_sensitive
 
     @property
     def search_text(self) -> str:
-        """Combined text for fuzzy search indexing."""
+        """Combined text for fuzzy search indexing (names + descriptions + params)."""
         parts = [self.id, self.summary, self.description]
+        parts.extend(self.aliases)
         parts.extend(self.tags)
         parts.extend(self.cmmc_controls)
+        for p in self.parameters:
+            parts.append(p.name)
+            parts.append(p.description)
         return " ".join(parts).lower()
+
+    @property
+    def read_only_hint(self) -> bool:
+        return self.safety_tier == SafetyTier.READ
+
+    @property
+    def destructive_hint(self) -> bool:
+        return self.safety_tier == SafetyTier.DESTRUCTIVE
+
+    @property
+    def idempotent_hint(self) -> bool:
+        # Reads and PUTs are idempotent; POSTs generally are not.
+        if self.safety_tier == SafetyTier.READ:
+            return True
+        return self.method.upper() in ("PUT", "DELETE")
+
+    @property
+    def open_world_hint(self) -> bool:
+        # Graph is an external system.
+        return True
+
+    def annotations(self) -> dict[str, bool]:
+        """MCP-style tool annotations."""
+        return {
+            "readOnlyHint": self.read_only_hint,
+            "destructiveHint": self.destructive_hint,
+            "idempotentHint": self.idempotent_hint,
+            "openWorldHint": self.open_world_hint,
+        }
 
 
 class OperationResult(BaseModel):
@@ -84,6 +151,8 @@ class OperationResult(BaseModel):
     data: list[dict[str, Any]] = Field(default_factory=list)
     execution_time_ms: int = 0
     graph_url: str = ""
+    request_id: str = ""
+    correlation_id: str = ""
 
 
 class WritePreview(BaseModel):
@@ -99,6 +168,8 @@ class WritePreview(BaseModel):
     confirm_token: str
     expires_at: datetime
     warnings: list[str] = Field(default_factory=list)
+    correlation_id: str = ""
+    idempotency_key: str = ""
 
 
 class ConfirmationToken(BaseModel):
@@ -108,6 +179,8 @@ class ConfirmationToken(BaseModel):
     created_at: datetime
     expires_at: datetime
     used: bool = False
+    correlation_id: str = ""
+    idempotency_key: str = ""
 
 
 class AuditEntry(BaseModel):
@@ -126,6 +199,11 @@ class AuditEntry(BaseModel):
     preview_shown: bool | None = None
     confirmed_at: datetime | None = None
     error: str | None = None
+    request_id: str | None = None
+    correlation_id: str | None = None
+    idempotency_key: str | None = None
+    response_bytes: int | None = None
+    error_code: str | None = None
 
 
 class AuthConfig(BaseModel):

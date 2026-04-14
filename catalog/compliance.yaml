@@ -9,6 +9,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/deviceCompliancePolicyDeviceStateSummary"
     api_version: "v1.0"
+    singleton: true
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     tags: ["compliance", "summary", "dashboard", "posture", "aggregate"]

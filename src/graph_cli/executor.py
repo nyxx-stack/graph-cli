@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -364,15 +365,23 @@ async def _execute_get(
     api_version: str,
     query_params: dict[str, str],
     top: int,
+    singleton: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> tuple[list[dict], int | None, bool]:
     """Execute a GET against Microsoft Graph, dispatching to the active auth backend."""
     from graph_cli.auth import get_auth_context, get_client, invoke_graph_powershell_request
 
     full_url = _compose_full_url(url, api_version, query_params)
+    request_headers = headers or {}
 
     if get_auth_context().auth_method == AuthMethod.GRAPH_POWERSHELL:
         async def fetch(target_url: str) -> dict[str, Any]:
-            response = invoke_graph_powershell_request(method="GET", url=target_url)
+            response = await asyncio.to_thread(
+                invoke_graph_powershell_request,
+                method="GET",
+                url=target_url,
+                headers=request_headers,
+            )
             return response if isinstance(response, dict) else {}
     else:
         from kiota_abstractions.method import Method
@@ -384,8 +393,14 @@ async def _execute_get(
             request_info = RequestInformation()
             request_info.http_method = Method.GET
             request_info.url = target_url
+            for header_name, header_value in request_headers.items():
+                request_info.headers.add(header_name, header_value)
             native_response = await adapter.send_primitive_async(request_info, "bytes", {})
             return json.loads(native_response) if native_response else {}
+
+    if singleton:
+        response = await fetch(full_url)
+        return ([response] if response else []), None, False
 
     return await _paginate_graph_response(fetch, full_url, top)
 
@@ -402,7 +417,12 @@ async def _execute_mutation(
     full_url = _compose_full_url(url, api_version)
 
     if get_auth_context().auth_method == AuthMethod.GRAPH_POWERSHELL:
-        response = invoke_graph_powershell_request(method=method, url=full_url, body=body)
+        response = await asyncio.to_thread(
+            invoke_graph_powershell_request,
+            method=method,
+            url=full_url,
+            body=body,
+        )
         return response if isinstance(response, dict) else None
 
     from kiota_abstractions.method import Method

@@ -10,6 +10,7 @@ operations:
     method: "GET"
     endpoint: "/directoryRoles"
     api_version: "v1.0"
+    supports_top: false
     graph_permissions:
       - "Directory.Read.All"
       - "RoleManagement.Read.Directory"

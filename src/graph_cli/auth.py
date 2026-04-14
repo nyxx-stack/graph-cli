@@ -9,10 +9,11 @@ import shutil
 import subprocess
 import sys
 import time
+import atexit
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from azure.identity import (
@@ -24,6 +25,9 @@ from azure.identity import (
 from msgraph import GraphServiceClient
 
 from graph_cli.types import AuthConfig, AuthMethod, AuthStatus
+
+if TYPE_CHECKING:
+    from graph_cli._ps_host import GraphPowerShellHost
 
 CONFIG_DIR = Path.home() / ".daf-graph"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
@@ -80,6 +84,8 @@ class CredentialContext:
 
 _cached_context: CredentialContext | None = None
 _client: GraphServiceClient | None = None
+_host: GraphPowerShellHost | None = None
+_host_atexit_registered = False
 
 
 @functools.lru_cache(maxsize=1)
@@ -249,12 +255,26 @@ def _try_graph_powershell_context(force_login: bool = False) -> CredentialContex
     )
 
 
+def _azure_cli_marker_present() -> bool:
+    """Check whether Azure CLI appears to have a persisted login profile."""
+    config_dir = Path(os.environ.get("AZURE_CONFIG_DIR") or (Path.home() / ".azure"))
+    return (config_dir / "azureProfile.json").exists()
+
+
+def _az_powershell_marker_present() -> bool:
+    """Check whether Azure PowerShell appears to have persisted auth state."""
+    base_dir = Path.home() / ".Azure"
+    return (base_dir / "AzureRmContext.json").exists() or (base_dir / "TokenCache.dat").exists()
+
+
 def _try_tool_credentials() -> CredentialContext | None:
     """Try existing Microsoft developer-tool sign-ins before app-based auth."""
-    for auth_method, builder in (
-        (AuthMethod.AZURE_CLI, AzureCliCredential),
-        (AuthMethod.AZURE_POWERSHELL, AzurePowerShellCredential),
+    for auth_method, builder, marker in (
+        (AuthMethod.AZURE_CLI, AzureCliCredential, _azure_cli_marker_present),
+        (AuthMethod.AZURE_POWERSHELL, AzurePowerShellCredential, _az_powershell_marker_present),
     ):
+        if not marker():
+            continue
         try:
             credential = builder()
             credential.get_token(GRAPH_RESOURCE_SCOPE)
@@ -319,7 +339,12 @@ def get_client(force_new: bool = False) -> GraphServiceClient:
 
 def login() -> AuthStatus:
     """Authenticate and return status after auth completes."""
+    global _host
     context = _get_credential(force_new=True)
+
+    if context.auth_method == AuthMethod.GRAPH_POWERSHELL and _host is not None:
+        _host.close()
+        _host = None
 
     if context.credential is None:
         return AuthStatus(
@@ -342,18 +367,34 @@ def login() -> AuthStatus:
 
 def logout() -> None:
     """Clear cached credentials."""
-    global _cached_context, _client
+    global _cached_context, _client, _host
     prior_method = _cached_context.auth_method if _cached_context else None
     _cached_context = None
     _client = None
     if prior_method == AuthMethod.GRAPH_POWERSHELL and _powershell_executable():
         try:
-            _run_powershell(
-                "Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue; "
-                "Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null"
-            )
+            if _host is not None:
+                try:
+                    _host.disconnect()
+                finally:
+                    _host.close()
+                    _host = None
+            else:
+                _run_powershell(
+                    "Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue; "
+                    "Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null"
+                )
         except (RuntimeError, subprocess.TimeoutExpired, OSError):
-            pass
+            try:
+                _run_powershell(
+                    "Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue; "
+                    "Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null"
+                )
+            except (RuntimeError, subprocess.TimeoutExpired, OSError):
+                pass
+    elif _host is not None:
+        _host.close()
+        _host = None
     # The persistent token cache is managed by azure-identity.
     # To fully clear it, we'd need to access the MSAL cache directly.
     # For now, clearing the in-memory references forces re-auth on next use.
@@ -396,37 +437,37 @@ def invoke_graph_powershell_request(
     method: str,
     url: str,
     body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Any:
     """Execute a Graph request through Microsoft Graph PowerShell."""
-    body_json = json.dumps(body) if body is not None else ""
-    script = f"""{_PS_PREAMBLE}
-$ctx = Get-MgContext -ErrorAction SilentlyContinue
-if (-not $ctx) {{
-{_scopes_block()}Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null
-    $ctx = Get-MgContext -ErrorAction SilentlyContinue
-}}
-if (-not $ctx) {{
-    throw 'Not authenticated with Microsoft Graph PowerShell. Run graph auth login or Connect-MgGraph -UseDeviceCode.'
-}}
-$params = @{{
-    Method = $env:GRAPHCLI_METHOD
-    Uri = $env:GRAPHCLI_URL
-    OutputType = 'Json'
-}}
-if ($env:GRAPHCLI_BODY) {{
-    $params.Body = $env:GRAPHCLI_BODY | ConvertFrom-Json
-}}
-$response = Invoke-MgGraphRequest @params
-if ($null -ne $response) {{
-    [Console]::Out.Write($response)
-}}
-"""
-    env = {
-        "GRAPHCLI_METHOD": method,
-        "GRAPHCLI_URL": url,
-        "GRAPHCLI_BODY": body_json,
-    }
-    return _run_powershell_json(script, extra_env=env)
+    return _get_graph_powershell_host().invoke(
+        method=method,
+        url=url,
+        body=body,
+        headers=headers,
+    )
+
+
+def _get_graph_powershell_host() -> GraphPowerShellHost:
+    """Create the shared Graph PowerShell host on first use."""
+    global _host, _host_atexit_registered
+
+    if _host is None:
+        from graph_cli._ps_host import GraphPowerShellHost
+
+        _host = GraphPowerShellHost(required_scopes=DELEGATED_SCOPES)
+        if not _host_atexit_registered:
+            atexit.register(_close_graph_powershell_host)
+            _host_atexit_registered = True
+    return _host
+
+
+def _close_graph_powershell_host() -> None:
+    """Close the shared Graph PowerShell host during interpreter shutdown."""
+    global _host
+    if _host is not None:
+        _host.close()
+        _host = None
 
 
 def save_config(tenant_id: str, client_id: str) -> None:

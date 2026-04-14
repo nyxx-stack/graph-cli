@@ -9,6 +9,7 @@ operations:
     method: "GET"
     endpoint: "/groups"
     api_version: "v1.0"
+    advanced_query: true
     graph_permissions:
       - "Group.Read.All"
     parameters:

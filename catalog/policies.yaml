@@ -17,7 +17,6 @@ operations:
       - "description"
       - "lastModifiedDateTime"
       - "createdDateTime"
-      - "@odata.type"
     default_orderby: "displayName asc"
     tags: ["profiles", "configuration", "policies", "intune", "settings"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
@@ -110,7 +109,6 @@ operations:
       - "description"
       - "lastModifiedDateTime"
       - "createdDateTime"
-      - "@odata.type"
     default_orderby: "displayName asc"
     tags: ["compliance", "policy", "enforcement", "password", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]

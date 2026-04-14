@@ -1,5 +1,8 @@
 operations:
   - id: "conditional_access.list_policies"
+    aliases: ["conditional_access.policies", "ca.list"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
     summary: "List all Conditional Access policies"
     description: >
       Returns all Conditional Access policies with state (enabled/disabled/
@@ -23,6 +26,9 @@ operations:
     cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]
 
   - id: "conditional_access.policy_detail"
+    aliases: ["conditional_access.detail", "ca.detail"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
     summary: "Get full details for a specific Conditional Access policy"
     description: >
       Returns the complete CA policy including all conditions, grant controls,

@@ -1,5 +1,8 @@
 operations:
   - id: "devices.list_managed"
+    aliases: ["devices.list"]
+    response_schema: "managedDevice"
+    rate_limit_class: "standard"
     summary: "List all Intune-managed devices"
     description: >
       Returns all devices enrolled in Intune MDM. Core fleet inventory query
@@ -36,6 +39,9 @@ operations:
       - description: "List devices sorted by last sync"
 
   - id: "devices.list_stale"
+    aliases: ["devices.stale"]
+    response_schema: "managedDevice"
+    rate_limit_class: "standard"
     summary: "List devices with no Intune check-in within N days"
     description: >
       Finds managed devices whose lastSyncDateTime is older than the specified
@@ -72,6 +78,9 @@ operations:
         parameters: {"days_inactive": "90"}
 
   - id: "devices.compliance_status"
+    aliases: ["devices.list_by_compliance", "devices.compliance"]
+    response_schema: "managedDevice"
+    rate_limit_class: "standard"
     summary: "List device compliance states (compliant, noncompliant, unknown)"
     description: >
       Returns compliance posture for managed devices. Filter by specific state
@@ -104,6 +113,8 @@ operations:
         parameters: {"state": "noncompliant"}
 
   - id: "devices.sync_device"
+    aliases: ["devices.sync"]
+    rate_limit_class: "standard"
     summary: "Trigger Intune sync on a specific managed device"
     description: >
       Sends a sync request to a managed device so it checks in with Intune

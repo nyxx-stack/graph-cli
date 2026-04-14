@@ -11,7 +11,7 @@ from rapidfuzz import fuzz
 from graphconnect.types import CatalogEntry, SafetyTier
 
 _catalog: list[CatalogEntry] | None = None
-_catalog_by_id: dict[str, CatalogEntry] | None = None
+_catalog_index: dict[str, CatalogEntry] | None = None
 _schemas: dict[str, Any] | None = None
 
 CATALOG_DIR = Path(__file__).resolve().parent.parent.parent / "catalog"
@@ -19,7 +19,7 @@ CATALOG_DIR = Path(__file__).resolve().parent.parent.parent / "catalog"
 
 def _load_catalog() -> list[CatalogEntry]:
     """Load all catalog YAML files into CatalogEntry objects."""
-    global _catalog, _catalog_by_id
+    global _catalog, _catalog_index
     if _catalog is not None:
         return _catalog
 
@@ -32,8 +32,15 @@ def _load_catalog() -> list[CatalogEntry]:
         for op_data in data.get("operations", []):
             entries.append(CatalogEntry(**op_data))
 
+    index: dict[str, CatalogEntry] = {entry.id: entry for entry in entries}
+    for entry in entries:
+        for alias in entry.aliases:
+            # An alias shadowing a canonical id is a catalog authoring error; ignore.
+            if alias not in index:
+                index[alias] = entry
+
     _catalog = entries
-    _catalog_by_id = {entry.id: entry for entry in entries}
+    _catalog_index = index
     return _catalog
 
 
@@ -69,10 +76,10 @@ def list_catalog(
 
 
 def get_entry(operation_id: str) -> CatalogEntry | None:
-    """Look up a specific catalog entry by operation ID."""
+    """Look up a catalog entry by operation ID or alias."""
     _load_catalog()
-    assert _catalog_by_id is not None
-    return _catalog_by_id.get(operation_id)
+    assert _catalog_index is not None
+    return _catalog_index.get(operation_id)
 
 
 def get_schema(resource_type: str) -> dict[str, Any] | None:

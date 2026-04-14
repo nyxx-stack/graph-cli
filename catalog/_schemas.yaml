@@ -86,3 +86,55 @@ conditionalAccessPolicy:
     sessionControls: {type: "conditionalAccessSessionControls", description: "Session controls"}
     createdDateTime: {type: "dateTimeOffset", description: "Created date"}
     modifiedDateTime: {type: "dateTimeOffset", description: "Last modified date"}
+
+directoryObject:
+  description: "Base Entra directory object (user, group, device, service principal, etc.)"
+  properties:
+    id: {type: "string", description: "Object ID"}
+    "@odata.type": {type: "string", description: "Concrete type — #microsoft.graph.user, .group, .device, etc."}
+    displayName: {type: "string", description: "Display name if the concrete type exposes one"}
+    userPrincipalName: {type: "string", description: "UPN (present on user-typed members)"}
+
+directoryRole:
+  description: "Activated Entra directory role (member-of enumeration)"
+  properties:
+    id: {type: "string", description: "Role instance ID"}
+    displayName: {type: "string", description: "Role name (e.g. Global Administrator)"}
+    description: {type: "string", description: "Role description"}
+    roleTemplateId: {type: "string", description: "Stable role template GUID"}
+  relationships:
+    members: {type: "collection", target: "directoryObject"}
+
+signIn:
+  description: "Entra sign-in log entry (Entra P1/P2, 30-day retention)"
+  properties:
+    id: {type: "string", description: "Sign-in ID"}
+    createdDateTime: {type: "dateTimeOffset", description: "When the sign-in happened"}
+    userDisplayName: {type: "string", description: "User display name"}
+    userPrincipalName: {type: "string", description: "User UPN"}
+    appDisplayName: {type: "string", description: "Application the user signed in to"}
+    conditionalAccessStatus: {type: "string", description: "success | failure | notApplied"}
+    status: {type: "signInStatus", description: "errorCode, failureReason"}
+    ipAddress: {type: "string", description: "Client IP"}
+    clientAppUsed: {type: "string", description: "Client app category"}
+
+directoryAudit:
+  description: "Entra directory audit event"
+  properties:
+    id: {type: "string", description: "Event ID"}
+    activityDateTime: {type: "dateTimeOffset", description: "When the activity occurred"}
+    activityDisplayName: {type: "string", description: "Activity name"}
+    category: {type: "string", description: "e.g. Device, UserManagement, Policy"}
+    result: {type: "string", description: "success | failure"}
+    initiatedBy: {type: "auditActivityInitiator", description: "User or app that initiated"}
+    targetResources: {type: "collection", description: "Resources affected by the event"}
+
+userRegistrationDetails:
+  description: "Per-user authentication method registration status (MFA posture)"
+  properties:
+    id: {type: "string", description: "User ID"}
+    userPrincipalName: {type: "string", description: "User UPN"}
+    userDisplayName: {type: "string", description: "User display name"}
+    isMfaRegistered: {type: "boolean", description: "User has registered any MFA method"}
+    isMfaCapable: {type: "boolean", description: "Tenant grants user access to MFA"}
+    methodsRegistered: {type: "collection(string)", description: "Registered method identifiers"}

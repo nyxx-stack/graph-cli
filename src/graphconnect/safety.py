@@ -47,6 +47,8 @@ def generate_token(
     safety_tier: SafetyTier,
     parameters: dict,
     body: dict | None = None,
+    correlation_id: str = "",
+    idempotency_key: str = "",
 ) -> ConfirmationToken:
     """Generate a confirmation token for a write/destructive preview."""
     now = datetime.now(timezone.utc)
@@ -61,6 +63,8 @@ def generate_token(
         created_at=now,
         expires_at=now + ttl,
         used=False,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
     )
 
     _save_token(token)

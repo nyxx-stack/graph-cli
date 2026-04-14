@@ -1,5 +1,7 @@
 operations:
   - id: "compliance.overall_summary"
+    aliases: ["compliance.summary"]
+    rate_limit_class: "standard"
     summary: "Get tenant-wide device compliance summary counts"
     description: >
       Returns aggregate counts of compliant, noncompliant, in-grace-period,

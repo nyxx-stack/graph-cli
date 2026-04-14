@@ -1,5 +1,8 @@
 operations:
   - id: "policies.list_config_profiles"
+    aliases: ["policies.config_profiles"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
     summary: "List Intune device configuration profiles"
     description: >
       Returns all configuration profiles with platform and assignment info.
@@ -22,6 +25,8 @@ operations:
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.profile_assignments"
+    aliases: ["policies.assignments"]
+    rate_limit_class: "standard"
     summary: "List group assignments for a configuration profile"
     description: >
       Shows which groups a configuration profile is assigned to.
@@ -42,6 +47,8 @@ operations:
     cmmc_controls: ["CM.L2-3.4.2"]
 
   - id: "policies.profile_device_status"
+    aliases: ["policies.profile_rollout"]
+    rate_limit_class: "standard"
     summary: "List per-device deployment status for a configuration profile"
     description: >
       Shows Succeeded/Failed/Pending/Error status per device for a specific
@@ -71,6 +78,9 @@ operations:
         parameters: {"profile_id": "<profile-id>"}
 
   - id: "policies.profile_settings"
+    aliases: ["policies.profile_detail"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
     summary: "Read setting details for a device configuration profile"
     description: >
       Returns the full configuration profile object including all settings.
@@ -92,6 +102,9 @@ operations:
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "AC.L2-3.1.10"]
 
   - id: "policies.list_compliance_policies"
+    aliases: ["policies.compliance_policies"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
     summary: "List Intune device compliance policies"
     description: >
       Returns all compliance policies configured in the tenant.
@@ -114,6 +127,9 @@ operations:
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.compliance_policy_settings"
+    aliases: ["policies.compliance_settings"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
     summary: "Read compliance policy settings (password length, encryption, etc.)"
     description: >
       Returns the full compliance policy object including all configured settings.
@@ -135,6 +151,8 @@ operations:
     cmmc_controls: ["CM.L2-3.4.1", "IA.L2-3.5.7"]
 
   - id: "policies.list_security_baselines"
+    aliases: ["policies.security_baselines"]
+    rate_limit_class: "standard"
     summary: "List security baseline profiles (BETA)"
     description: >
       Returns endpoint security baseline profiles. Note: this uses the /beta

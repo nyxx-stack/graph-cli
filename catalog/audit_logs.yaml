@@ -1,5 +1,8 @@
 operations:
   - id: "audit.directory_logs"
+    aliases: ["audit.directory"]
+    response_schema: "directoryAudit"
+    rate_limit_class: "throttle_sensitive"
     summary: "Query Entra directory audit logs"
     description: >
       Returns audit log entries for directory operations (user, group, device,
@@ -42,6 +45,9 @@ operations:
         parameters: {"category": "UserManagement"}
 
   - id: "audit.sign_in_logs"
+    aliases: ["audit.signins", "audit.sign_ins"]
+    response_schema: "signIn"
+    rate_limit_class: "throttle_sensitive"
     summary: "Query Entra sign-in logs"
     description: >
       Returns user sign-in activity including success/failure, MFA status,

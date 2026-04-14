@@ -1,8 +1,7 @@
-﻿"""Append-only JSONL audit log for all Graph operations."""
+"""Append-only JSONL audit log for all Graph operations."""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +28,11 @@ def log_operation(
     preview_shown: bool | None = None,
     confirmed_at: datetime | None = None,
     error: str | None = None,
+    error_code: str | None = None,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+    idempotency_key: str | None = None,
+    response_bytes: int | None = None,
 ) -> None:
     """Append an audit entry to the JSONL log."""
     entry = AuditEntry(
@@ -47,6 +51,11 @@ def log_operation(
         preview_shown=preview_shown,
         confirmed_at=confirmed_at,
         error=error,
+        error_code=error_code,
+        request_id=request_id,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
+        response_bytes=response_bytes,
     )
 
     global _audit_dir_ready
@@ -55,4 +64,3 @@ def log_operation(
         _audit_dir_ready = True
     with open(AUDIT_FILE, "a", encoding="utf-8") as f:
         f.write(entry.model_dump_json() + "\n")
-

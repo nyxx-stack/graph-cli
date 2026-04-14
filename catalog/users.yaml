@@ -1,5 +1,8 @@
 operations:
   - id: "users.list_privileged"
+    aliases: ["users.privileged_roles", "roles.list_active"]
+    response_schema: "directoryRole"
+    rate_limit_class: "standard"
     summary: "List users with privileged Entra directory roles"
     description: >
       Returns active directory role assignments. Use to audit Global Admin,
@@ -24,6 +27,9 @@ operations:
       - description: "List all active directory roles and their members"
 
   - id: "users.mfa_status"
+    aliases: ["users.mfa"]
+    response_schema: "userRegistrationDetails"
+    rate_limit_class: "throttle_sensitive"
     summary: "Check MFA registration and enforcement status for users"
     description: >
       Returns authentication method registration details per user from the
@@ -59,6 +65,9 @@ operations:
       - description: "All users with MFA status"
 
   - id: "users.list_all"
+    aliases: ["users.list"]
+    response_schema: "user"
+    rate_limit_class: "standard"
     summary: "List all Entra ID users"
     description: >
       Returns all users in the tenant directory. Filter by account enabled

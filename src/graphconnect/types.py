@@ -27,6 +27,43 @@ class AuthMethod(str, Enum):
     AZURE_POWERSHELL = "azure_powershell"
 
 
+class ErrorCode(str, Enum):
+    """Semantic error codes mapped to POSIX-style exit codes (see output.exit_for_code)."""
+
+    USAGE_ERROR = "usage_error"
+    NOT_FOUND = "not_found"
+    PERMISSION_DENIED = "permission_denied"
+    CONFLICT = "conflict"
+    THROTTLED = "throttled"
+    AUTH_REQUIRED = "auth_required"
+    BAD_REQUEST = "bad_request"
+    TOKEN_INVALID = "token_invalid"
+    TOKEN_EXPIRED = "token_expired"
+    WRONG_TIER = "wrong_tier"
+    UPSTREAM_ERROR = "upstream_error"
+    UNKNOWN = "unknown"
+
+
+class ErrorPayload(BaseModel):
+    """Structured error emitted on stderr in JSON mode or rendered in TTY mode."""
+
+    code: ErrorCode
+    message: str
+    hint: str | None = None
+    retryable: bool = False
+    http_status: int | None = None
+    graph_error_code: str | None = None
+    correlation_id: str | None = None
+
+
+class CliError(Exception):
+    """Exception carrying a structured ErrorPayload for CLI surfaces to render."""
+
+    def __init__(self, payload: ErrorPayload) -> None:
+        self.payload = payload
+        super().__init__(payload.message)
+
+
 class CatalogParameter(BaseModel):
     name: str
     type: str = "string"

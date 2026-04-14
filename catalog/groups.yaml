@@ -1,5 +1,8 @@
 operations:
   - id: "groups.list_all"
+    aliases: ["groups.list"]
+    response_schema: "group"
+    rate_limit_class: "standard"
     summary: "List Entra security groups"
     description: >
       Returns security groups in the tenant. Use name_contains to filter
@@ -34,6 +37,9 @@ operations:
         parameters: {"name_contains": "DAF"}
 
   - id: "groups.list_members"
+    aliases: ["groups.members"]
+    response_schema: "directoryObject"
+    rate_limit_class: "standard"
     summary: "List members of a specific group"
     description: >
       Returns user and device members of a group. Use to verify
@@ -62,6 +68,8 @@ operations:
         parameters: {"group_id": "<group-object-id>"}
 
   - id: "groups.add_member"
+    aliases: ["groups.member_add"]
+    rate_limit_class: "standard"
     summary: "Add a user or device to a group"
     description: >
       Adds a directory object (user or device) as a member of the specified group.

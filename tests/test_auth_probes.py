@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
-from graph_cli.auth import _try_tool_credentials
-from graph_cli.types import AuthMethod
+from graphconnect.auth import _try_tool_credentials
+from graphconnect.types import AuthMethod
 
 
 def test_try_tool_credentials_skips_azure_cli_without_marker(tmp_path, monkeypatch):
@@ -12,8 +12,8 @@ def test_try_tool_credentials_skips_azure_cli_without_marker(tmp_path, monkeypat
 
     cli_builder = Mock()
     azps_builder = Mock()
-    monkeypatch.setattr("graph_cli.auth.AzureCliCredential", cli_builder)
-    monkeypatch.setattr("graph_cli.auth.AzurePowerShellCredential", azps_builder)
+    monkeypatch.setattr("graphconnect.auth.AzureCliCredential", cli_builder)
+    monkeypatch.setattr("graphconnect.auth.AzurePowerShellCredential", azps_builder)
 
     result = _try_tool_credentials()
 
@@ -32,8 +32,8 @@ def test_try_tool_credentials_attempts_azure_cli_with_marker_then_continues(tmp_
 
     azps_builder = Mock()
 
-    monkeypatch.setattr("graph_cli.auth.AzureCliCredential", cli_builder)
-    monkeypatch.setattr("graph_cli.auth.AzurePowerShellCredential", azps_builder)
+    monkeypatch.setattr("graphconnect.auth.AzureCliCredential", cli_builder)
+    monkeypatch.setattr("graphconnect.auth.AzurePowerShellCredential", azps_builder)
 
     result = _try_tool_credentials()
 
@@ -50,14 +50,14 @@ def test_try_tool_credentials_attempts_azure_powershell_with_marker(tmp_path, mo
     (az_dir / "AzureRmContext.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.delenv("AZURE_CONFIG_DIR", raising=False)
-    monkeypatch.setattr("graph_cli.auth.Path.home", lambda: home)
+    monkeypatch.setattr("graphconnect.auth.Path.home", lambda: home)
 
     azps_credential = Mock()
     azps_credential.get_token.return_value = object()
     azps_builder = Mock(return_value=azps_credential)
 
-    monkeypatch.setattr("graph_cli.auth.AzureCliCredential", Mock())
-    monkeypatch.setattr("graph_cli.auth.AzurePowerShellCredential", azps_builder)
+    monkeypatch.setattr("graphconnect.auth.AzureCliCredential", Mock())
+    monkeypatch.setattr("graphconnect.auth.AzurePowerShellCredential", azps_builder)
 
     result = _try_tool_credentials()
 

@@ -5,7 +5,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from graph_cli._ps_host import GraphPowerShellHost
+from graphconnect._ps_host import GraphPowerShellHost
 
 
 FAKE_HOST_SCRIPT = """
@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 sys.stdout.write(json.dumps({"type": "ready", "authenticated": True}) + "\\n")
 sys.stdout.flush()
+
+close_once_marker = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 
 for raw in sys.stdin:
     if not raw.strip():
@@ -27,8 +30,8 @@ for raw in sys.stdin:
         sys.stdout.flush()
         break
     if cmd.get("url") == "close-once":
-        if not globals().get("_closed_once"):
-            globals()["_closed_once"] = True
+        if close_once_marker is not None and not close_once_marker.exists():
+            close_once_marker.write_text("1", encoding="utf-8")
             sys.stdout.flush()
             sys.exit(0)
     payload = {
@@ -44,11 +47,12 @@ for raw in sys.stdin:
 
 def _make_process_factory(tmp_path: Path):
     script_path = tmp_path / "fake_ps_host.py"
+    marker_path = tmp_path / "close-once.marker"
     script_path.write_text(textwrap.dedent(FAKE_HOST_SCRIPT), encoding="utf-8")
 
     def factory() -> subprocess.Popen[str]:
         return subprocess.Popen(
-            [sys.executable, "-u", str(script_path)],
+            [sys.executable, "-u", str(script_path), str(marker_path)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -3,10 +3,24 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "daf-graph-cli"
+name = "graphconnect"
 version = "0.1.0"
-description = "Microsoft Graph CLI for CMMC L2 Intune/Entra management"
+description = "Opinionated Microsoft Graph operator CLI for Intune and Entra workflows"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+keywords = ["microsoft-graph", "intune", "entra", "powershell", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "msgraph-sdk>=1.55.0,<2",
     "azure-identity>=1.25.0,<2",
@@ -18,7 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-graph = "graph_cli.main:app"
+graphconnect = "graphconnect.main:app"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

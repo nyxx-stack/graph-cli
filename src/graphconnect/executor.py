@@ -333,8 +333,9 @@ def _build_query_params(
         select_fields = select or entry.default_select
         if select_fields:
             query["$select"] = ",".join(select_fields)
-        if expand:
-            query["$expand"] = expand
+        expand_expr = expand or entry.default_expand
+        if expand_expr:
+            query["$expand"] = expand_expr
         return query
 
     if entry.supports_top:
@@ -382,8 +383,9 @@ def _build_query_params(
     if entry.advanced_query:
         query["$count"] = "true"
 
-    if expand:
-        query["$expand"] = expand
+    expand_expr = expand or entry.default_expand
+    if expand_expr:
+        query["$expand"] = expand_expr
 
     return query
 

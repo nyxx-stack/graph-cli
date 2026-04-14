@@ -95,6 +95,7 @@ class CatalogEntry(BaseModel):
     default_select: list[str] | None = None
     default_filter: str | None = None
     default_orderby: str | None = None
+    default_expand: str | None = None
     computed_filter: str | None = None
     body_template: dict[str, Any] | None = None
     tags: list[str] = Field(default_factory=list)

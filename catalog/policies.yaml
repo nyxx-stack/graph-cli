@@ -3,10 +3,11 @@ operations:
     aliases: ["policies.config_profiles"]
     response_schema: "deviceConfiguration"
     rate_limit_class: "standard"
-    summary: "List Intune device configuration profiles"
+    summary: "List Intune classic device configuration profiles"
     description: >
-      Returns all configuration profiles with platform and assignment info.
-      Use for policy inventory, naming audit, and deployment tracking.
+      Returns legacy (pre-Settings Catalog) configuration profiles from
+      /deviceManagement/deviceConfigurations. For modern Settings Catalog
+      profiles (most new Windows policies), use policies.list_settings_catalog.
     domain: "policies"
     safety_tier: "read"
     method: "GET"
@@ -21,16 +22,70 @@ operations:
       - "lastModifiedDateTime"
       - "createdDateTime"
     default_orderby: "displayName asc"
-    tags: ["profiles", "configuration", "policies", "intune", "settings"]
+    tags: ["profiles", "configuration", "policies", "intune", "settings", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.list_settings_catalog"
+    aliases: ["policies.settings_catalog", "policies.configuration_policies"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
+    summary: "List Intune Settings Catalog configuration policies"
+    description: >
+      Returns modern Settings Catalog policies from
+      /deviceManagement/configurationPolicies. These are the
+      post-2021 unified profiles most new Windows/macOS work uses.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/configurationPolicies"
+    api_version: "beta"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    default_select:
+      - "id"
+      - "name"
+      - "description"
+      - "platforms"
+      - "technologies"
+      - "lastModifiedDateTime"
+      - "createdDateTime"
+    tags: ["profiles", "configuration", "policies", "intune", "settings-catalog", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.list_modern_compliance"
+    aliases: ["policies.compliance_modern", "policies.unified_compliance"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
+    summary: "List Intune unified/Settings Catalog compliance policies"
+    description: >
+      Returns modern compliance policies from /deviceManagement/compliancePolicies
+      (Settings Catalog era, post-2023). The classic per-platform policies are
+      at policies.list_compliance_policies.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/compliancePolicies"
+    api_version: "beta"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    default_select:
+      - "id"
+      - "name"
+      - "description"
+      - "platforms"
+      - "technologies"
+      - "lastModifiedDateTime"
+      - "createdDateTime"
+    tags: ["compliance", "policy", "intune", "settings-catalog", "modern"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.profile_assignments"
     aliases: ["policies.assignments"]
     rate_limit_class: "standard"
-    summary: "List group assignments for a configuration profile"
+    summary: "List group assignments for a classic configuration profile"
     description: >
-      Shows which groups a configuration profile is assigned to.
-      Verify policy targeting matches the DAF group structure.
+      Shows which groups a classic (deviceConfigurations) profile is assigned to.
+      For Settings Catalog policies, use policies.settings_catalog_assignments.
     domain: "policies"
     safety_tier: "read"
     method: "GET"
@@ -43,7 +98,29 @@ operations:
         type: "string"
         required: true
         description: "Configuration profile ID"
-    tags: ["assignments", "targeting", "groups", "profile"]
+    tags: ["assignments", "targeting", "groups", "profile", "classic"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.settings_catalog_assignments"
+    aliases: ["policies.sc_assignments", "policies.configuration_policy_assignments"]
+    rate_limit_class: "standard"
+    summary: "List group assignments for a Settings Catalog policy"
+    description: >
+      Shows group assignments for a modern Settings Catalog configuration policy.
+      Uses /deviceManagement/configurationPolicies/{id}/assignments endpoint.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}/assignments"
+    api_version: "beta"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID (from policies.list_settings_catalog)"
+    tags: ["assignments", "targeting", "groups", "settings-catalog", "modern"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
   - id: "policies.profile_device_status"

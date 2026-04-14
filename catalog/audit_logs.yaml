@@ -32,9 +32,11 @@ operations:
       - "id"
       - "activityDisplayName"
       - "activityDateTime"
+      - "category"
       - "initiatedBy"
       - "targetResources"
       - "result"
+      - "resultReason"
     default_orderby: "activityDateTime desc"
     tags: ["audit", "logs", "changes", "activity", "history", "trail"]
     cmmc_controls: ["AU.L2-3.3.1", "AU.L2-3.3.3"]

@@ -26,6 +26,8 @@ operations:
       - "displayName"
       - "description"
       - "groupTypes"
+      - "mailEnabled"
+      - "securityEnabled"
       - "membershipRule"
       - "membershipRuleProcessingState"
     default_filter: "securityEnabled eq true"
@@ -60,7 +62,6 @@ operations:
       - "id"
       - "displayName"
       - "userPrincipalName"
-      - "@odata.type"
     tags: ["members", "membership", "group", "targeting"]
     cmmc_controls: ["AC.L2-3.1.1"]
     examples:

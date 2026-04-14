@@ -21,6 +21,7 @@ operations:
       - "id"
       - "displayName"
       - "roleTemplateId"
+    default_expand: "members"
     tags: ["privileged", "admin", "roles", "access review", "least privilege"]
     cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.5"]
     examples:

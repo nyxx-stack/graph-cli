@@ -64,7 +64,15 @@ try {{
                     break
                 }}
                 'request' {{
-                    $params = @{{ Method = $cmd.method; Uri = $cmd.url; OutputType = 'PSObject' }}
+                    $statusCode = $null
+                    $responseHeaders = $null
+                    $params = @{{
+                        Method = $cmd.method
+                        Uri = $cmd.url
+                        OutputType = 'PSObject'
+                        StatusCodeVariable = 'statusCode'
+                        ResponseHeadersVariable = 'responseHeaders'
+                    }}
                     if ($null -ne $cmd.body) {{ $params.Body = $cmd.body }}
                     if ($null -ne $cmd.headers) {{
                         $ht = @{{}}
@@ -72,7 +80,21 @@ try {{
                         $params.Headers = $ht
                     }}
                     $resp = Invoke-MgGraphRequest @params
-                    $env = @{{ id = $id; ok = $true; data = $resp }}
+                    $headerMap = @{{}}
+                    if ($null -ne $responseHeaders) {{
+                        foreach ($entry in $responseHeaders.GetEnumerator()) {{
+                            $headerMap[$entry.Key] = $entry.Value
+                        }}
+                    }}
+                    $env = @{{
+                        id = $id
+                        ok = $true
+                        data = @{{
+                            body = $resp
+                            status_code = $statusCode
+                            headers = $headerMap
+                        }}
+                    }}
                     [Console]::Out.WriteLine(($env | ConvertTo-Json -Compress -Depth 32))
                     [Console]::Out.Flush()
                 }}
@@ -315,4 +337,3 @@ class GraphPowerShellHost:
         if not self._stderr_buf:
             return message
         return f"{message} stderr: {' | '.join(self._stderr_buf)}"
-

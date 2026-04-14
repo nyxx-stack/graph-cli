@@ -6,6 +6,7 @@ import atexit
 import functools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,19 +36,25 @@ TOKEN_CACHE_NAME = "graphconnect"
 GRAPH_RESOURCE_SCOPE = "https://graph.microsoft.com/.default"
 
 DELEGATED_SCOPES = [
+    "Application.Read.All",
     "DeviceManagementManagedDevices.Read.All",
     "DeviceManagementManagedDevices.ReadWrite.All",
     "DeviceManagementManagedDevices.PrivilegedOperations.All",
     "DeviceManagementConfiguration.Read.All",
     "DeviceManagementConfiguration.ReadWrite.All",
+    "Directory.AccessAsUser.All",
     "Directory.Read.All",
     "User.Read.All",
+    "User.EnableDisableAccount.All",
+    "User-PasswordProfile.ReadWrite.All",
     "Device.Read.All",
     "Group.Read.All",
+    "Group.ReadWrite.All",
     "GroupMember.Read.All",
     "GroupMember.ReadWrite.All",
     "AuditLog.Read.All",
     "Policy.Read.All",
+    "Policy.ReadWrite.ConditionalAccess",
     "RoleManagement.Read.Directory",
 ]
 
@@ -143,7 +150,38 @@ def _run_powershell_json(script: str, extra_env: dict[str, str] | None = None) -
     payload = result.stdout.strip()
     if not payload:
         return None
-    return json.loads(payload)
+    return _parse_powershell_json_payload(payload)
+
+
+def _parse_powershell_json_payload(payload: str) -> Any:
+    """Parse JSON from PowerShell stdout, tolerating extra chatter around the JSON payload."""
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+
+    for line in reversed(payload.splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    for match in re.finditer(r"(?m)(?P<json>null|true|false|\{|\[)", payload):
+        start = match.start("json")
+        try:
+            value, end = decoder.raw_decode(payload[start:])
+        except json.JSONDecodeError:
+            continue
+        if payload[start + end :].strip():
+            continue
+        return value
+
+    raise RuntimeError("PowerShell command did not emit valid JSON.")
 
 
 def _scopes_block() -> str:

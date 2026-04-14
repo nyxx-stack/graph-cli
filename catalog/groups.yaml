@@ -97,3 +97,73 @@ operations:
       "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{member_id}"
     tags: ["add", "member", "group", "assignment"]
     cmmc_controls: ["AC.L2-3.1.1"]
+
+  - id: "groups.remove_member"
+    aliases: ["groups.member_remove"]
+    rate_limit_class: "standard"
+    summary: "Remove a user or device from a group"
+    description: >
+      Removes a directory object from a group using the required /$ref suffix.
+      This operation never targets the non-/$ref variant.
+    domain: "groups"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/groups/{group_id}/members/{member_id}/$ref"
+    preview_lookup_endpoint: "/groups/{group_id}/members/{member_id}"
+    preview_lookup_select: ["id", "displayName", "userPrincipalName"]
+    execute_fingerprint_fields: ["id", "displayName", "userPrincipalName", "@odata.type"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "GroupMember.ReadWrite.All"
+    parameters:
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target group object ID"
+      - name: "member_id"
+        type: "string"
+        required: true
+        description: "Member object ID to remove"
+    tags: ["remove", "member", "group", "assignment", "$ref"]
+    cmmc_controls: ["AC.L2-3.1.5", "AC.L2-3.1.1"]
+
+  - id: "groups.update_rule"
+    aliases: ["groups.rule_update", "groups.dynamic_rule"]
+    response_schema: "group"
+    rate_limit_class: "standard"
+    summary: "Update a group's dynamic membership rule"
+    description: >
+      PATCH a group's membershipRule and membershipRuleProcessingState. Supply
+      --body for more advanced group updates if needed.
+    domain: "groups"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/groups/{group_id}"
+    body_template:
+      membershipRule: "{membership_rule}"
+      membershipRuleProcessingState: "{membership_rule_processing_state}"
+    preview_lookup_endpoint: "/groups/{group_id}"
+    preview_lookup_select: ["id", "displayName", "membershipRule", "membershipRuleProcessingState"]
+    execute_fingerprint_fields: ["id", "displayName", "membershipRule", "membershipRuleProcessingState"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Group.ReadWrite.All"
+    parameters:
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target group object ID"
+      - name: "membership_rule"
+        type: "string"
+        required: false
+        description: "Dynamic membership rule string"
+      - name: "membership_rule_processing_state"
+        type: "string"
+        required: false
+        default: "On"
+        description: "Processing state for the rule"
+        enum: ["On", "Paused"]
+    tags: ["group", "dynamic", "membership", "rule", "patch"]
+    cmmc_controls: ["AC.L2-3.1.5", "AC.L2-3.1.1"]

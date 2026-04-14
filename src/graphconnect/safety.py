@@ -49,6 +49,7 @@ def generate_token(
     body: dict | None = None,
     correlation_id: str = "",
     idempotency_key: str = "",
+    resource_fingerprint: str | None = None,
 ) -> ConfirmationToken:
     """Generate a confirmation token for a write/destructive preview."""
     now = datetime.now(timezone.utc)
@@ -65,6 +66,7 @@ def generate_token(
         used=False,
         correlation_id=correlation_id,
         idempotency_key=idempotency_key,
+        resource_fingerprint=resource_fingerprint,
     )
 
     _save_token(token)
@@ -167,4 +169,3 @@ def _save_all_tokens(tokens: dict[str, ConfirmationToken]) -> None:
             f,
             indent=2,
         )
-

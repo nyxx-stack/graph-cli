@@ -257,3 +257,459 @@ operations:
       - "publishedDateTime"
     tags: ["baseline", "security", "template", "endpoint security"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "SC.L2-3.13.1"]
+
+  - id: "policies.create_compliance_policy"
+    aliases: ["policies.compliance_create"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
+    summary: "Create a classic Intune device compliance policy"
+    description: >
+      Creates a policy on /deviceManagement/deviceCompliancePolicies. Supply the
+      full derived-policy JSON body (for example a windows10CompliancePolicy).
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/deviceCompliancePolicies"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies"
+    api_version: "v1.0"
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    tags: ["compliance", "policy", "create", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.update_compliance_policy"
+    aliases: ["policies.compliance_update"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
+    summary: "Update a classic Intune device compliance policy"
+    description: >
+      PATCH a policy on /deviceManagement/deviceCompliancePolicies/{policy_id}.
+      Supply only the properties being changed.
+    domain: "policies"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+    tags: ["compliance", "policy", "update", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.delete_compliance_policy"
+    aliases: ["policies.compliance_delete"]
+    rate_limit_class: "standard"
+    summary: "Delete a classic Intune device compliance policy"
+    description: >
+      DELETE a policy from /deviceManagement/deviceCompliancePolicies/{policy_id}.
+      This permanently removes the policy object.
+    domain: "policies"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+    tags: ["compliance", "policy", "delete", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.assign_compliance_policy"
+    aliases: ["policies.compliance_assign"]
+    rate_limit_class: "standard"
+    summary: "Assign a classic Intune device compliance policy"
+    description: >
+      Calls the assign action for /deviceManagement/deviceCompliancePolicies.
+      Supply the assignments payload body documented by Microsoft Graph.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/assign"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+    tags: ["compliance", "policy", "assign", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.create_modern_compliance_policy"
+    aliases: ["policies.modern_compliance_create"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
+    summary: "Create a modern Intune compliance policy"
+    description: >
+      Creates a policy on /deviceManagement/compliancePolicies. Supply the
+      full modern compliance policy JSON body.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/compliancePolicies"
+    preview_lookup_endpoint: "/deviceManagement/compliancePolicies"
+    api_version: "beta"
+    beta: true
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    tags: ["compliance", "policy", "create", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.update_modern_compliance_policy"
+    aliases: ["policies.modern_compliance_update"]
+    response_schema: "deviceCompliancePolicy"
+    rate_limit_class: "standard"
+    summary: "Update a modern Intune compliance policy"
+    description: >
+      PATCH a policy on /deviceManagement/compliancePolicies/{policy_id}. Supply
+      only the properties being changed.
+    domain: "policies"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/deviceManagement/compliancePolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/compliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Modern compliance policy ID"
+    tags: ["compliance", "policy", "update", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.delete_modern_compliance_policy"
+    aliases: ["policies.modern_compliance_delete"]
+    rate_limit_class: "standard"
+    summary: "Delete a modern Intune compliance policy"
+    description: >
+      DELETE a policy from /deviceManagement/compliancePolicies/{policy_id}.
+    domain: "policies"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/deviceManagement/compliancePolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/compliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Modern compliance policy ID"
+    tags: ["compliance", "policy", "delete", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.assign_modern_compliance_policy"
+    aliases: ["policies.modern_compliance_assign"]
+    rate_limit_class: "standard"
+    summary: "Assign a modern Intune compliance policy"
+    description: >
+      Calls the assign action for /deviceManagement/compliancePolicies.
+      Supply the assignments payload body.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/compliancePolicies/{policy_id}/assign"
+    preview_lookup_endpoint: "/deviceManagement/compliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Modern compliance policy ID"
+    tags: ["compliance", "policy", "assign", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "IA.L2-3.5.7"]
+
+  - id: "policies.create_settings_catalog_profile"
+    aliases: ["policies.settings_catalog_create"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
+    summary: "Create an Intune Settings Catalog profile"
+    description: >
+      Creates a profile on /deviceManagement/configurationPolicies. Supply the
+      full configuration policy JSON body.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/configurationPolicies"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies"
+    api_version: "beta"
+    beta: true
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    tags: ["settings-catalog", "policy", "create", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.update_settings_catalog_profile"
+    aliases: ["policies.settings_catalog_update"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
+    summary: "Update an Intune Settings Catalog profile"
+    description: >
+      PATCH a profile on /deviceManagement/configurationPolicies/{policy_id}.
+      Supply only the properties being changed.
+    domain: "policies"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+    tags: ["settings-catalog", "policy", "update", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.delete_settings_catalog_profile"
+    aliases: ["policies.settings_catalog_delete"]
+    rate_limit_class: "standard"
+    summary: "Delete an Intune Settings Catalog profile"
+    description: >
+      DELETE a profile from /deviceManagement/configurationPolicies/{policy_id}.
+    domain: "policies"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+    tags: ["settings-catalog", "policy", "delete", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.assign_settings_catalog_profile"
+    aliases: ["policies.settings_catalog_assign"]
+    rate_limit_class: "standard"
+    summary: "Assign an Intune Settings Catalog profile"
+    description: >
+      Calls the assign action for /deviceManagement/configurationPolicies.
+      Supply the assignments payload body.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}/assign"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+    tags: ["settings-catalog", "policy", "assign", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.update_config_profile"
+    aliases: ["policies.config_profile_update"]
+    response_schema: "deviceConfiguration"
+    rate_limit_class: "standard"
+    summary: "Update a classic Intune device configuration profile"
+    description: >
+      PATCH a profile on /deviceManagement/deviceConfigurations/{profile_id}.
+      Supply only the properties being changed.
+    domain: "policies"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Classic configuration profile ID"
+    tags: ["configuration", "profile", "update", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.delete_config_profile"
+    aliases: ["policies.config_profile_delete"]
+    rate_limit_class: "standard"
+    summary: "Delete a classic Intune device configuration profile"
+    description: >
+      DELETE a profile from /deviceManagement/deviceConfigurations/{profile_id}.
+    domain: "policies"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Classic configuration profile ID"
+    tags: ["configuration", "profile", "delete", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.assign_config_profile"
+    aliases: ["policies.config_profile_assign"]
+    rate_limit_class: "standard"
+    summary: "Assign a classic Intune device configuration profile"
+    description: >
+      Calls the assign action for /deviceManagement/deviceConfigurations.
+      Supply the assignments payload body.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/deviceConfigurations/{profile_id}/assign"
+    preview_lookup_endpoint: "/deviceManagement/deviceConfigurations/{profile_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "profile_id"
+        type: "string"
+        required: true
+        description: "Classic configuration profile ID"
+    tags: ["configuration", "profile", "assign", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.list_intent_profiles"
+    aliases: ["policies.intents", "policies.list_baseline_intents"]
+    response_schema: "deviceManagementIntent"
+    rate_limit_class: "standard"
+    summary: "List Intune baseline intents"
+    description: >
+      Returns deviceManagementIntents from the beta endpoint. This is the Graph
+      surface behind editable Intune baseline intent profiles.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/intents"
+    api_version: "beta"
+    beta: true
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    default_select:
+      - "id"
+      - "displayName"
+      - "description"
+      - "templateId"
+      - "lastModifiedDateTime"
+    tags: ["baseline", "intent", "security", "beta"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.intent_settings"
+    aliases: ["policies.intent_detail", "policies.intent_customized_settings"]
+    rate_limit_class: "standard"
+    summary: "Get customized settings for an Intune baseline intent"
+    description: >
+      Reads the customized settings projection for a deviceManagementIntent
+      using the getCustomizedSettings function.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/intents/{intent_id}/getCustomizedSettings()"
+    api_version: "beta"
+    beta: true
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "intent_id"
+        type: "string"
+        required: true
+        description: "deviceManagementIntent ID"
+    tags: ["baseline", "intent", "settings", "beta"]
+    cmmc_controls: []
+
+  - id: "policies.update_intent_settings"
+    aliases: ["policies.intent_update_settings"]
+    rate_limit_class: "standard"
+    summary: "Update settings on an Intune baseline intent"
+    description: >
+      Calls the updateSettings action for /deviceManagement/intents/{intent_id}.
+      Supply the action body documented by Microsoft Graph beta.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/intents/{intent_id}/updateSettings"
+    preview_lookup_endpoint: "/deviceManagement/intents/{intent_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "beta"
+    beta: true
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "intent_id"
+        type: "string"
+        required: true
+        description: "deviceManagementIntent ID"
+    tags: ["baseline", "intent", "settings", "update", "beta"]
+    cmmc_controls: []

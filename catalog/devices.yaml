@@ -132,5 +132,112 @@ operations:
         type: "string"
         required: true
         description: "Intune managed device ID"
+    preview_lookup_endpoint: "/deviceManagement/managedDevices/{device_id}"
+    preview_lookup_select: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    execute_fingerprint_fields: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    expected_success_status: 204
     tags: ["sync", "checkin", "policy", "refresh"]
     cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "devices.retire"
+    aliases: ["devices.retire_device"]
+    rate_limit_class: "standard"
+    summary: "Retire an Intune-managed device"
+    description: >
+      Calls the retire action for a managed device. This removes corporate data
+      and unenrolls the device per Intune platform behavior.
+    domain: "devices"
+    safety_tier: "destructive"
+    method: "POST"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/retire"
+    preview_lookup_endpoint: "/deviceManagement/managedDevices/{device_id}"
+    preview_lookup_select: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    execute_fingerprint_fields: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementManagedDevices.PrivilegedOperations.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managed device ID"
+    tags: ["device", "retire", "intune", "lifecycle"]
+    cmmc_controls: ["MP.L2-3.8.3"]
+
+  - id: "devices.wipe"
+    aliases: ["devices.wipe_device"]
+    rate_limit_class: "standard"
+    summary: "Wipe an Intune-managed device"
+    description: >
+      Calls the wipe action for a managed device. Provide --body when you need
+      non-default wipe options such as keeping user or enrollment data.
+    domain: "devices"
+    safety_tier: "destructive"
+    method: "POST"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/wipe"
+    preview_lookup_endpoint: "/deviceManagement/managedDevices/{device_id}"
+    preview_lookup_select: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    execute_fingerprint_fields: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementManagedDevices.PrivilegedOperations.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managed device ID"
+    tags: ["device", "wipe", "intune", "lifecycle"]
+    cmmc_controls: ["MP.L2-3.8.3"]
+
+  - id: "devices.delete_managed_device"
+    aliases: ["devices.delete_intune_device"]
+    rate_limit_class: "standard"
+    summary: "Delete an Intune-managed device record"
+    description: >
+      DELETE a managedDevice object from Intune.
+    domain: "devices"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/deviceManagement/managedDevices/{device_id}"
+    preview_lookup_endpoint: "/deviceManagement/managedDevices/{device_id}"
+    preview_lookup_select: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    execute_fingerprint_fields: ["id", "deviceName", "userPrincipalName", "lastSyncDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementManagedDevices.ReadWrite.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managed device ID"
+    tags: ["device", "delete", "intune", "managed"]
+    cmmc_controls: ["MP.L2-3.8.3"]
+
+  - id: "devices.delete_entra_device"
+    aliases: ["devices.delete_directory_device"]
+    rate_limit_class: "standard"
+    summary: "Delete an Entra registered device"
+    description: >
+      DELETE a device object from /devices/{device_id}. This is the primitive
+      for stale Entra-only registration cleanup.
+    domain: "devices"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/devices/{device_id}"
+    preview_lookup_endpoint: "/devices/{device_id}"
+    preview_lookup_select: ["id", "displayName", "deviceId", "approximateLastSignInDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "deviceId", "approximateLastSignInDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Directory.AccessAsUser.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Entra device object ID"
+    tags: ["device", "delete", "entra", "directory", "stale"]
+    cmmc_controls: ["MP.L2-3.8.3"]

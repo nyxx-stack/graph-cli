@@ -35,10 +35,14 @@ for raw in sys.stdin:
             sys.stdout.flush()
             sys.exit(0)
     payload = {
-        "method": cmd.get("method"),
-        "url": cmd.get("url"),
-        "body": cmd.get("body"),
-        "headers": cmd.get("headers"),
+        "body": {
+            "method": cmd.get("method"),
+            "url": cmd.get("url"),
+            "body": cmd.get("body"),
+            "headers": cmd.get("headers"),
+        },
+        "status_code": 204 if cmd.get("method") != "GET" else 200,
+        "headers": {"request-id": "fake-request"},
     }
     sys.stdout.write(json.dumps({"id": cmd["id"], "ok": True, "data": payload}, ensure_ascii=False) + "\\n")
     sys.stdout.flush()
@@ -76,10 +80,14 @@ def test_host_round_trip_and_unicode(tmp_path):
     )
 
     assert result == {
-        "method": "POST",
-        "url": "users",
-        "body": body,
-        "headers": {"ConsistencyLevel": "eventual"},
+        "body": {
+            "method": "POST",
+            "url": "users",
+            "body": body,
+            "headers": {"ConsistencyLevel": "eventual"},
+        },
+        "status_code": 204,
+        "headers": {"request-id": "fake-request"},
     }
     host.close()
 
@@ -90,7 +98,7 @@ def test_host_large_body_round_trip(tmp_path):
 
     result = host.invoke(method="PATCH", url="policies", body={"payload": large_value})
 
-    assert result["body"]["payload"] == large_value
+    assert result["body"]["body"]["payload"] == large_value
     host.close()
 
 
@@ -107,7 +115,7 @@ def test_host_respawns_once_after_broken_pipe(tmp_path):
 
     result = host.invoke(method="GET", url="close-once")
 
-    assert result["url"] == "close-once"
+    assert result["body"]["url"] == "close-once"
     assert spawn_count == 2
     host.close()
 

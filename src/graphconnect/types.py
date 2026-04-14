@@ -98,6 +98,10 @@ class CatalogEntry(BaseModel):
     default_expand: str | None = None
     computed_filter: str | None = None
     body_template: dict[str, Any] | None = None
+    preview_lookup_endpoint: str | None = None
+    preview_lookup_select: list[str] | None = None
+    execute_fingerprint_fields: list[str] = Field(default_factory=list)
+    expected_success_status: int | None = None
     tags: list[str] = Field(default_factory=list)
     cmmc_controls: list[str] = Field(default_factory=list)
     examples: list[CatalogExample] = Field(default_factory=list)
@@ -188,6 +192,7 @@ class ConfirmationToken(BaseModel):
     used: bool = False
     correlation_id: str = ""
     idempotency_key: str = ""
+    resource_fingerprint: str | None = None
 
 
 class AuditEntry(BaseModel):
@@ -225,4 +230,3 @@ class AuthStatus(BaseModel):
     display_name: str | None = None
     token_expires: datetime | None = None
     scopes: list[str] = Field(default_factory=list)
-

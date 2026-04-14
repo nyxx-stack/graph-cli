@@ -48,3 +48,157 @@ operations:
         description: "Conditional Access policy ID"
     tags: ["conditional access", "ca", "detail", "policy"]
     cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]
+
+  - id: "conditional_access.create_policy"
+    aliases: ["ca.create", "conditional_access.policy_create"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
+    summary: "Create a Conditional Access policy"
+    description: >
+      Creates a new Conditional Access policy. Supply the full policy JSON body.
+      Microsoft documents a known permissions issue on create; if preview or
+      execution returns 403, reauthenticate with Application.Read.All as well.
+    domain: "conditional_access"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/identity/conditionalAccess/policies"
+    preview_lookup_endpoint: "/identity/conditionalAccess/policies"
+    api_version: "v1.0"
+    expected_success_status: 201
+    graph_permissions:
+      - "Policy.Read.All"
+      - "Policy.ReadWrite.ConditionalAccess"
+      - "Application.Read.All"
+    tags: ["conditional access", "ca", "create", "policy", "zero trust"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.17", "IA.L2-3.5.3"]
+
+  - id: "conditional_access.update_policy"
+    aliases: ["ca.update", "conditional_access.policy_update"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
+    summary: "Patch a Conditional Access policy"
+    description: >
+      PATCH a Conditional Access policy. This operation is partial-update safe:
+      send only the properties being changed.
+    domain: "conditional_access"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "state", "modifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "state", "modifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Policy.Read.All"
+      - "Policy.ReadWrite.ConditionalAccess"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Conditional Access policy ID"
+    tags: ["conditional access", "ca", "update", "patch", "policy"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.17", "IA.L2-3.5.3"]
+
+  - id: "conditional_access.delete_policy"
+    aliases: ["ca.delete", "conditional_access.policy_delete"]
+    rate_limit_class: "standard"
+    summary: "Delete a Conditional Access policy"
+    description: >
+      DELETE a Conditional Access policy. This permanently removes the policy.
+    domain: "conditional_access"
+    safety_tier: "destructive"
+    method: "DELETE"
+    endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "state", "modifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "state", "modifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Policy.Read.All"
+      - "Policy.ReadWrite.ConditionalAccess"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Conditional Access policy ID"
+    tags: ["conditional access", "ca", "delete", "policy"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.17", "IA.L2-3.5.3"]
+
+  - id: "conditional_access.set_policy_state"
+    aliases: ["ca.set_state", "conditional_access.state"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
+    summary: "Set the state of a Conditional Access policy"
+    description: >
+      Helper PATCH operation that updates only the state property on a
+      Conditional Access policy.
+    domain: "conditional_access"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    body_template:
+      state: "{state}"
+    preview_lookup_endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "state", "modifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "state", "modifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Policy.Read.All"
+      - "Policy.ReadWrite.ConditionalAccess"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Conditional Access policy ID"
+      - name: "state"
+        type: "string"
+        required: true
+        description: "Target state"
+        enum: ["disabled", "enabledForReportingButNotEnforced", "enabled"]
+    tags: ["conditional access", "ca", "state", "report-only", "enable", "disable"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.17", "IA.L2-3.5.3"]
+
+  - id: "conditional_access.update_user_targets"
+    aliases: ["ca.user_targets", "conditional_access.users_patch"]
+    response_schema: "conditionalAccessPolicy"
+    rate_limit_class: "standard"
+    summary: "Add or remove a user from Conditional Access include/exclude targets"
+    description: >
+      Helper PATCH operation that reads the current policy, merges one user into
+      conditions.users includeUsers or excludeUsers, and PATCHes only that block.
+    domain: "conditional_access"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_endpoint: "/identity/conditionalAccess/policies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "state", "modifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "state", "modifiedDateTime", "conditions.users.includeUsers", "conditions.users.excludeUsers"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Policy.Read.All"
+      - "Policy.ReadWrite.ConditionalAccess"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Conditional Access policy ID"
+      - name: "target_list"
+        type: "string"
+        required: true
+        description: "Which user list to change"
+        enum: ["includeUsers", "excludeUsers"]
+      - name: "action"
+        type: "string"
+        required: true
+        description: "Whether to add or remove the user"
+        enum: ["add", "remove"]
+      - name: "user_id"
+        type: "string"
+        required: true
+        description: "User object ID to add or remove"
+    tags: ["conditional access", "ca", "users", "include", "exclude", "patch"]
+    cmmc_controls: ["AC.L2-3.1.1", "AC.L2-3.1.17", "IA.L2-3.5.3"]

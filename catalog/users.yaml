@@ -102,3 +102,69 @@ operations:
         parameters: {"account_enabled": "true"}
       - description: "All disabled accounts"
         parameters: {"account_enabled": "false"}
+
+  - id: "users.disable_account"
+    aliases: ["users.disable", "users.block_signin"]
+    response_schema: "user"
+    rate_limit_class: "standard"
+    summary: "Disable a user account"
+    description: >
+      PATCH the user's accountEnabled property to false. This is destructive in
+      the operational sense because it blocks sign-in.
+    domain: "users"
+    safety_tier: "destructive"
+    method: "PATCH"
+    endpoint: "/users/{user_id}"
+    body_template:
+      accountEnabled: false
+    preview_lookup_endpoint: "/users/{user_id}"
+    preview_lookup_select: ["id", "displayName", "userPrincipalName", "accountEnabled"]
+    execute_fingerprint_fields: ["id", "displayName", "userPrincipalName", "accountEnabled"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "User.Read.All"
+      - "User.EnableDisableAccount.All"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        required: true
+        description: "User object ID or UPN"
+    tags: ["users", "disable", "block", "sign-in", "offboarding"]
+    cmmc_controls: ["AC.L2-3.1.1", "IA.L2-3.5.3"]
+
+  - id: "users.reset_password"
+    aliases: ["users.password_reset", "users.reset_pwd"]
+    response_schema: "user"
+    rate_limit_class: "standard"
+    summary: "Reset a user's password"
+    description: >
+      PATCH the user's passwordProfile. By default the helper sets
+      forceChangePasswordNextSignIn to true unless the body overrides it.
+    domain: "users"
+    safety_tier: "destructive"
+    method: "PATCH"
+    endpoint: "/users/{user_id}"
+    preview_lookup_endpoint: "/users/{user_id}"
+    preview_lookup_select: ["id", "displayName", "userPrincipalName", "accountEnabled"]
+    execute_fingerprint_fields: ["id", "displayName", "userPrincipalName", "accountEnabled"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "User-PasswordProfile.ReadWrite.All"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        required: true
+        description: "User object ID or UPN"
+      - name: "new_password"
+        type: "string"
+        required: false
+        description: "New password to set when not supplying --body"
+      - name: "force_change_next_sign_in"
+        type: "boolean"
+        required: false
+        default: true
+        description: "Whether the user must change the password at next sign-in"
+    tags: ["users", "password", "reset", "offboarding", "response"]
+    cmmc_controls: ["AC.L2-3.1.1", "IA.L2-3.5.3"]

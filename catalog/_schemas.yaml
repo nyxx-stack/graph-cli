@@ -52,6 +52,15 @@ group:
     members: {type: "collection", target: "directoryObject"}
     owners: {type: "collection", target: "directoryObject"}
 
+device:
+  description: "Entra registered device"
+  properties:
+    id: {type: "string", description: "Directory object ID"}
+    deviceId: {type: "string", description: "Alternate device identifier"}
+    displayName: {type: "string", description: "Device display name"}
+    accountEnabled: {type: "boolean", description: "Whether the device object is enabled"}
+    approximateLastSignInDateTime: {type: "dateTimeOffset", description: "Approximate last sign-in time"}
+
 deviceCompliancePolicy:
   description: "Intune compliance policy"
   properties:
@@ -74,6 +83,16 @@ deviceConfiguration:
   relationships:
     assignments: {type: "collection", target: "deviceConfigurationAssignment"}
     deviceStatuses: {type: "collection", target: "deviceConfigurationDeviceStatus"}
+
+deviceManagementIntent:
+  description: "Intune baseline intent profile"
+  properties:
+    id: {type: "string", description: "Intent ID"}
+    displayName: {type: "string", description: "Intent display name"}
+    description: {type: "string", description: "Intent description"}
+    templateId: {type: "string", description: "Backing template ID"}
+    isAssigned: {type: "boolean", description: "Whether the intent has assignments"}
+    lastModifiedDateTime: {type: "dateTimeOffset", description: "Last modified time"}
 
 conditionalAccessPolicy:
   description: "Entra Conditional Access policy"

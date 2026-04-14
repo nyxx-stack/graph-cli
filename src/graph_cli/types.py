@@ -20,6 +20,13 @@ class ApiVersion(str, Enum):
     BETA = "beta"
 
 
+class AuthMethod(str, Enum):
+    DEVICE_CODE = "device_code"
+    GRAPH_POWERSHELL = "graph_powershell"
+    AZURE_CLI = "azure_cli"
+    AZURE_POWERSHELL = "azure_powershell"
+
+
 class CatalogParameter(BaseModel):
     name: str
     type: str = "string"
@@ -57,6 +64,9 @@ class CatalogEntry(BaseModel):
     cmmc_controls: list[str] = Field(default_factory=list)
     examples: list[CatalogExample] = Field(default_factory=list)
     beta: bool = False
+    singleton: bool = False
+    supports_top: bool = True
+    advanced_query: bool = False
 
     @property
     def search_text(self) -> str:
@@ -125,6 +135,7 @@ class AuthConfig(BaseModel):
 
 class AuthStatus(BaseModel):
     authenticated: bool = False
+    auth_method: AuthMethod | None = None
     user_principal: str | None = None
     display_name: str | None = None
     token_expires: datetime | None = None

@@ -29,8 +29,12 @@ def auth_login() -> None:
         result = login()
         if result.authenticated:
             console.print("[green]Authenticated successfully.[/green]")
+            if result.auth_method:
+                console.print(f"Auth method: {result.auth_method.value}")
             if result.user_principal:
                 console.print(f"User: {result.user_principal}")
+            if result.token_expires:
+                console.print(f"Token expires: {result.token_expires.isoformat()}")
         else:
             console.print("[red]Authentication failed.[/red]")
             raise typer.Exit(1)
@@ -52,6 +56,8 @@ def auth_status(
         print_json(result.model_dump())
     elif result.authenticated:
         console.print("[green]Authenticated[/green]")
+        if result.auth_method:
+            console.print(f"Auth method: {result.auth_method}")
         if result.user_principal:
             console.print(f"User: {result.user_principal}")
         if result.display_name:

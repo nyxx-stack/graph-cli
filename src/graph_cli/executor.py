@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
+from urllib.parse import urlencode
 
 from graph_cli.audit import log_operation
 from graph_cli.safety import check_rate_limit, generate_token, validate_token
-from graph_cli.types import CatalogEntry, OperationResult, SafetyTier, WritePreview
+from graph_cli.types import AuthMethod, CatalogEntry, OperationResult, SafetyTier, WritePreview
 
 
 async def execute_read(
@@ -21,25 +23,26 @@ async def execute_read(
     order_by: str | None = None,
 ) -> OperationResult:
     """Execute a read-tier catalog operation against Microsoft Graph."""
-    from graph_cli.auth import ensure_authenticated
-
-    # Rate limit check
     retry_after = check_rate_limit(SafetyTier.READ)
     if retry_after is not None:
         raise RuntimeError(f"Rate limited. Retry after {retry_after:.0f} seconds.")
 
-    parameters = parameters or {}
+    parameters = _apply_parameter_defaults(entry, parameters or {})
     start_time = time.monotonic()
 
-    # Build the URL and query parameters
     url = _build_url(entry, parameters)
     query_params = _build_query_params(entry, parameters, top, select, filter_expr, expand, order_by)
+    headers = _build_headers(entry)
 
-    client = ensure_authenticated()
-
-    # Execute via httpx through the Graph SDK's request adapter
     try:
-        data, total_count, has_more = await _execute_get(client, url, entry.api_version.value, query_params, top)
+        data, total_count, has_more = await _execute_get(
+            url,
+            entry.api_version.value,
+            query_params,
+            top,
+            singleton=entry.singleton,
+            headers=headers,
+        )
     except Exception as e:
         elapsed = int((time.monotonic() - start_time) * 1000)
         log_operation(
@@ -133,30 +136,26 @@ async def execute_write(
     confirm_token: str = "",
 ) -> dict[str, Any] | None:
     """Execute a write operation after validating the confirmation token."""
-    from graph_cli.auth import ensure_authenticated
-
     parameters = parameters or {}
     request_body = _build_body(entry, parameters, body)
 
     # Validate token (raises on failure)
-    token = validate_token(
+    validate_token(
         confirm_token=confirm_token,
         operation_id=entry.id,
         parameters=parameters,
         body=request_body,
     )
 
-    # Rate limit check
     retry_after = check_rate_limit(entry.safety_tier)
     if retry_after is not None:
         raise RuntimeError(f"Rate limited. Retry after {retry_after:.0f} seconds.")
 
     url = _build_url(entry, parameters)
-    client = ensure_authenticated()
     start_time = time.monotonic()
 
     try:
-        result = await _execute_mutation(client, entry.method, url, entry.api_version.value, request_body)
+        result = await _execute_mutation(entry.method, url, entry.api_version.value, request_body)
     except Exception as e:
         elapsed = int((time.monotonic() - start_time) * 1000)
         log_operation(
@@ -215,6 +214,23 @@ def _build_url(entry: CatalogEntry, parameters: dict) -> str:
     return url
 
 
+def _apply_parameter_defaults(entry: CatalogEntry, parameters: dict) -> dict:
+    """Fill in declared default values for parameters the caller didn't provide."""
+    merged = dict(parameters)
+    for param in entry.parameters:
+        if param.name not in merged and param.default is not None:
+            merged[param.name] = param.default
+    return merged
+
+
+def _build_headers(entry: CatalogEntry) -> dict[str, str]:
+    """Build request headers required by the catalog entry."""
+    headers: dict[str, str] = {}
+    if entry.advanced_query:
+        headers["ConsistencyLevel"] = "eventual"
+    return headers
+
+
 def _build_query_params(
     entry: CatalogEntry,
     parameters: dict,
@@ -227,31 +243,42 @@ def _build_query_params(
     """Build OData query parameters."""
     query: dict[str, str] = {}
 
-    # Top
-    query["$top"] = str(min(top, 999))
+    if entry.singleton:
+        # Singletons don't support $top/$orderby/$filter; $select is still fine.
+        select_fields = select or entry.default_select
+        if select_fields:
+            query["$select"] = ",".join(select_fields)
+        if expand:
+            query["$expand"] = expand
+        return query
 
-    # Select
+    if entry.supports_top:
+        query["$top"] = str(min(top, 999))
+
     select_fields = select or entry.default_select
     if select_fields:
         query["$select"] = ",".join(select_fields)
 
-    # Filter: combine default + parameter-mapped + user-provided
     filters = []
     if entry.default_filter:
         filters.append(entry.default_filter)
 
-    # Apply computed_filter with parameter substitution
     if entry.computed_filter:
         computed = entry.computed_filter
-        for param in entry.parameters:
-            if param.name in parameters:
-                if "{cutoff_datetime}" in computed and param.name == "days_inactive":
-                    days = int(parameters[param.name])
-                    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-                    computed = computed.replace("{cutoff_datetime}", cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"))
-        filters.append(computed)
+        if "{cutoff_datetime}" in computed:
+            days_param = next(
+                (p for p in entry.parameters if p.name in ("days_inactive", "days")),
+                None,
+            )
+            if days_param and days_param.name in parameters:
+                days = int(parameters[days_param.name])
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                computed = computed.replace(
+                    "{cutoff_datetime}", cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+        if "{cutoff_datetime}" not in computed:
+            filters.append(computed)
 
-    # Apply maps_to_filter from parameters
     for param in entry.parameters:
         if param.maps_to_filter and param.name in parameters:
             mapped = param.maps_to_filter.replace("{value}", str(parameters[param.name]))
@@ -263,12 +290,13 @@ def _build_query_params(
     if filters:
         query["$filter"] = " and ".join(filters)
 
-    # OrderBy
     order = order_by or entry.default_orderby
     if order:
         query["$orderby"] = order
 
-    # Expand
+    if entry.advanced_query:
+        query["$count"] = "true"
+
     if expand:
         query["$expand"] = expand
 
@@ -303,72 +331,82 @@ def _build_description(entry: CatalogEntry, parameters: dict) -> str:
     return f"{entry.summary} -- {desc}"
 
 
+def _compose_full_url(url: str, api_version: str, query_params: dict[str, str] | None = None) -> str:
+    """Compose a fully-qualified Graph URL from the relative path and query parameters."""
+    full_url = f"https://graph.microsoft.com/{api_version}{url}"
+    if query_params:
+        query_string = urlencode(query_params, safe="$,")
+        if query_string:
+            full_url += f"?{query_string}"
+    return full_url
+
+
+async def _paginate_graph_response(
+    fetch: Callable[[str], Awaitable[dict[str, Any]]],
+    first_url: str,
+    top: int,
+) -> tuple[list[dict], int | None, bool]:
+    """Walk @odata.nextLink pages up to `top` items using the provided fetch callable."""
+    response_data = await fetch(first_url)
+    total_count = response_data.get("@odata.count")
+    next_link = response_data.get("@odata.nextLink")
+    collected = list(response_data.get("value", []))
+    while next_link and len(collected) < top:
+        response_data = await fetch(next_link)
+        collected.extend(response_data.get("value", []))
+        next_link = response_data.get("@odata.nextLink")
+    has_more = len(collected) > top or next_link is not None
+    return collected[:top], total_count, has_more
+
+
 async def _execute_get(
-    client: Any,
     url: str,
     api_version: str,
     query_params: dict[str, str],
     top: int,
 ) -> tuple[list[dict], int | None, bool]:
-    """Execute a GET request against the Graph API with pagination support."""
-    from kiota_abstractions.request_information import RequestInformation
-    from kiota_http.middleware.options import ResponseHandlerOption
-    from kiota_abstractions.method import Method
+    """Execute a GET against Microsoft Graph, dispatching to the active auth backend."""
+    from graph_cli.auth import get_auth_context, get_client, invoke_graph_powershell_request
 
-    # Build query string
-    qs_parts = [f"{k}={v}" for k, v in query_params.items()]
-    query_string = "&".join(qs_parts)
-    full_url = f"https://graph.microsoft.com/{api_version}{url}"
-    if query_string:
-        full_url += f"?{query_string}"
+    full_url = _compose_full_url(url, api_version, query_params)
 
-    adapter = client.request_adapter
+    if get_auth_context().auth_method == AuthMethod.GRAPH_POWERSHELL:
+        async def fetch(target_url: str) -> dict[str, Any]:
+            response = invoke_graph_powershell_request(method="GET", url=target_url)
+            return response if isinstance(response, dict) else {}
+    else:
+        from kiota_abstractions.method import Method
+        from kiota_abstractions.request_information import RequestInformation
 
-    request_info = RequestInformation()
-    request_info.http_method = Method.GET
-    request_info.url = full_url
+        adapter = get_client().request_adapter
 
-    # Send raw request and parse JSON
-    import httpx
+        async def fetch(target_url: str) -> dict[str, Any]:
+            request_info = RequestInformation()
+            request_info.http_method = Method.GET
+            request_info.url = target_url
+            native_response = await adapter.send_primitive_async(request_info, "bytes", {})
+            return json.loads(native_response) if native_response else {}
 
-    native_response = await adapter.send_primitive_async(request_info, "bytes", {})
-    import json
-    response_data = json.loads(native_response) if native_response else {}
-
-    items = response_data.get("value", [])
-    next_link = response_data.get("@odata.nextLink")
-    total_count = response_data.get("@odata.count")
-
-    # Follow pagination up to the requested top
-    collected = list(items)
-    while next_link and len(collected) < top:
-        request_info = RequestInformation()
-        request_info.http_method = Method.GET
-        request_info.url = next_link
-        native_response = await adapter.send_primitive_async(request_info, "bytes", {})
-        response_data = json.loads(native_response) if native_response else {}
-        page_items = response_data.get("value", [])
-        collected.extend(page_items)
-        next_link = response_data.get("@odata.nextLink")
-
-    has_more = len(collected) > top or next_link is not None
-    return collected[:top], total_count, has_more
+    return await _paginate_graph_response(fetch, full_url, top)
 
 
 async def _execute_mutation(
-    client: Any,
     method: str,
     url: str,
     api_version: str,
     body: dict | None,
 ) -> dict[str, Any] | None:
-    """Execute a POST/PATCH/DELETE request against the Graph API."""
-    from kiota_abstractions.request_information import RequestInformation
-    from kiota_abstractions.method import Method
-    from kiota_abstractions.headers_collection import HeadersCollection
-    import json
+    """Execute a POST/PATCH/DELETE/PUT against Microsoft Graph, dispatching to the active auth backend."""
+    from graph_cli.auth import get_auth_context, get_client, invoke_graph_powershell_request
 
-    full_url = f"https://graph.microsoft.com/{api_version}{url}"
+    full_url = _compose_full_url(url, api_version)
+
+    if get_auth_context().auth_method == AuthMethod.GRAPH_POWERSHELL:
+        response = invoke_graph_powershell_request(method=method, url=full_url, body=body)
+        return response if isinstance(response, dict) else None
+
+    from kiota_abstractions.method import Method
+    from kiota_abstractions.request_information import RequestInformation
 
     method_map = {
         "POST": Method.POST,
@@ -380,14 +418,12 @@ async def _execute_mutation(
     request_info = RequestInformation()
     request_info.http_method = method_map.get(method, Method.POST)
     request_info.url = full_url
-
     if body:
         request_info.headers.add("Content-Type", "application/json")
         request_info.set_stream_content(json.dumps(body).encode("utf-8"))
 
-    adapter = client.request_adapter
+    adapter = get_client().request_adapter
     native_response = await adapter.send_primitive_async(request_info, "bytes", {})
-
     if native_response:
         try:
             return json.loads(native_response)

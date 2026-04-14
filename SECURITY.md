@@ -8,7 +8,7 @@ This project is intended for Windows-based operator workflows that interact with
 
 Do not open public issues for credential exposure, tenant data leakage, or unintended write behavior.
 
-Until a dedicated security inbox exists, report security issues privately to the maintainer through the channel where you received this repository.
+Report security issues privately using GitHub's "Report a vulnerability" button under the repository's Security tab (Private Vulnerability Reporting).
 
 ## Sensitive Data
 

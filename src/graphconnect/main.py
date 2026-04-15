@@ -82,10 +82,18 @@ def auth_login(
     try:
         result = login()
     except RuntimeError as exc:
+        hint = "Install Microsoft.Graph.Authentication or configure MSGRAPH_TENANT_ID / MSGRAPH_CLIENT_ID."
+        message = str(exc)
+        if "sign-in window exited" in message or "Graph context became visible" in message:
+            hint = (
+                "If the separate sign-in window reported success, wait a few seconds and run "
+                "`graphconnect auth status`. If it still shows unauthenticated, rerun "
+                "`graphconnect auth login` and leave the sign-in window open briefly after success."
+            )
         _fail(
             ErrorCode.AUTH_REQUIRED,
-            str(exc),
-            hint="Install Microsoft.Graph.Authentication or configure MSGRAPH_TENANT_ID / MSGRAPH_CLIENT_ID.",
+            message,
+            hint=hint,
             fmt=fmt,
             cause=exc,
         )

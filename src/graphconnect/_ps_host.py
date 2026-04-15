@@ -37,8 +37,11 @@ $requiredScopes = ConvertFrom-Json @'
 '@
 $ctx = Get-MgContext -ErrorAction SilentlyContinue
 if (-not $ctx) {{
-    Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null
-    $ctx = Get-MgContext -ErrorAction SilentlyContinue
+    try {{
+        Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null
+        $ctx = Get-MgContext -ErrorAction SilentlyContinue
+    }} catch {{
+    }}
 }}
 if (-not $ctx) {{
     [Console]::Out.WriteLine('{{"type":"ready","authenticated":false,"error":"not_authenticated"}}')
@@ -108,13 +111,35 @@ try {{
                 }}
             }}
         }} catch {{
-            $env = @{{ id = $id; ok = $false; error = "$($_.Exception.Message)" }}
+            $detail = $null
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {{
+                $detail = $_.ErrorDetails.Message
+            }} elseif ($_.Exception -and $_.Exception.PSObject.Properties.Match('Response').Count -gt 0) {{
+                try {{
+                    $response = $_.Exception.Response
+                    if ($null -ne $response -and $response.Content) {{
+                        $detail = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    }}
+                }} catch {{
+                }}
+            }}
+            $env = @{{
+                id = $id
+                ok = $false
+                error = "$($_.Exception.Message)"
+                detail = $detail
+                fully_qualified_error_id = "$($_.FullyQualifiedErrorId)"
+            }}
             [Console]::Out.WriteLine(($env | ConvertTo-Json -Compress -Depth 32))
             [Console]::Out.Flush()
         }}
     }}
 }} catch {{
-    [Console]::Out.WriteLine((@{{ id = -1; ok = $false; error = "$($_.Exception.Message)" }} | ConvertTo-Json -Compress -Depth 32))
+    $detail = $null
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {{
+        $detail = $_.ErrorDetails.Message
+    }}
+    [Console]::Out.WriteLine((@{{ id = -1; ok = $false; error = "$($_.Exception.Message)"; detail = $detail }} | ConvertTo-Json -Compress -Depth 32))
     [Console]::Out.Flush()
     exit 1
 }}
@@ -213,6 +238,11 @@ class GraphPowerShellHost:
             raise _HostProtocolError("response id mismatch")
         if not response.get("ok"):
             error = response.get("error") or "PowerShell request failed."
+            detail = response.get("detail")
+            fqid = response.get("fully_qualified_error_id")
+            extra_parts = [part for part in (detail, fqid) if part]
+            if extra_parts:
+                error = f"{error} details: {' | '.join(extra_parts)}"
             raise RuntimeError(self._format_comm_error(error))
         return response.get("data")
 
@@ -274,13 +304,16 @@ class GraphPowerShellHost:
         stdout = process.stdout
         if stdout is None:
             raise _HostEOFError("PowerShell host stdout unavailable.")
-        line = stdout.readline()
-        if line == "":
-            raise _HostEOFError(self._format_comm_error("PowerShell host exited unexpectedly."))
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise _HostProtocolError(f"invalid host JSON: {line.strip()}") from exc
+        while True:
+            line = stdout.readline()
+            if line == "":
+                raise _HostEOFError(self._format_comm_error("PowerShell host exited unexpectedly."))
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                text = line.strip()
+                if text:
+                    self._stderr_buf.append(f"stdout:{text}")
 
     def _require_process_locked(self) -> subprocess.Popen[str]:
         process = self._process

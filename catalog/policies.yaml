@@ -292,6 +292,10 @@ operations:
     description: >
       Creates a policy on /deviceManagement/deviceCompliancePolicies. Supply the
       full derived-policy JSON body (for example a windows10CompliancePolicy).
+      Classic Windows compliance creates also need scheduledActionsForRule in
+      the request body; in practice Graph expects the default ruleName
+      PasswordRequired even when the real policy focus is device-health
+      attestation such as Secure Boot or Code Integrity.
     domain: "policies"
     safety_tier: "write"
     method: "POST"

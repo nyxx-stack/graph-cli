@@ -141,9 +141,13 @@ def _launch_powershell_window(
     return subprocess.Popen(argv, env=env, creationflags=creationflags)
 
 
-def _run_powershell_json(script: str, extra_env: dict[str, str] | None = None) -> Any:
+def _run_powershell_json(
+    script: str,
+    extra_env: dict[str, str] | None = None,
+    timeout: float | None = 60,
+) -> Any:
     """Run a PowerShell script that emits JSON and parse the result."""
-    result = _run_powershell(script, extra_env=extra_env)
+    result = _run_powershell(script, extra_env=extra_env, timeout=timeout)
     if result.returncode != 0:
         error = (result.stderr or result.stdout).strip()
         raise RuntimeError(error or "PowerShell command failed.")
@@ -190,16 +194,24 @@ def _scopes_block() -> str:
     return f"$requiredScopes = ConvertFrom-Json @'\n{scopes_json}\n'@\n"
 
 
-def _get_graph_powershell_context_data(connect: bool = False) -> dict[str, Any] | None:
+def _get_graph_powershell_context_data(
+    connect: bool = False,
+    *,
+    use_device_code: bool = False,
+    timeout: float | None = 60,
+) -> dict[str, Any] | None:
     """Read the current Graph PowerShell context; optionally reconnect from cache first."""
     parts = [_PS_PREAMBLE]
     if connect:
+        connect_cmd = "Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome"
+        if use_device_code:
+            connect_cmd = "Connect-MgGraph -ContextScope CurrentUser -UseDeviceCode -Scopes $requiredScopes -NoWelcome"
         parts.append(
             f"{_scopes_block()}"
-            "Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null\n"
+            f"{connect_cmd} | Out-Null\n"
         )
     parts.append(_GET_CONTEXT_TAIL)
-    data = _run_powershell_json("".join(parts))
+    data = _run_powershell_json("".join(parts), timeout=timeout)
     return data if isinstance(data, dict) else None
 
 
@@ -257,7 +269,11 @@ def _try_graph_powershell_context(force_login: bool = False) -> CredentialContex
 
     if data is None:
         try:
-            data = _get_graph_powershell_context_data(connect=True)
+            # Get-MgContext is process-local. A prior successful sign-in may have
+            # populated the CurrentUser token cache without leaving an active
+            # context in this new PowerShell process. Probe with UseDeviceCode so
+            # cached delegated auth can be rehydrated silently without hidden WAM.
+            data = _get_graph_powershell_context_data(connect=True, use_device_code=True, timeout=15)
         except (RuntimeError, subprocess.TimeoutExpired):
             data = None
 
@@ -275,15 +291,35 @@ def _try_graph_powershell_context(force_login: bool = False) -> CredentialContex
         process = _launch_powershell_window(login_script)
 
         deadline = time.monotonic() + 300
+        exit_code: int | None = None
+        exit_seen_at: float | None = None
         while time.monotonic() < deadline:
-            data = _get_graph_powershell_context_data()
+            try:
+                data = _get_graph_powershell_context_data(connect=True, use_device_code=True, timeout=15)
+            except (RuntimeError, subprocess.TimeoutExpired):
+                data = None
             current_scopes = set(data.get("scopes") or []) if data else set()
             missing_scopes = [scope for scope in DELEGATED_SCOPES if scope not in current_scopes]
             if data is not None and not missing_scopes:
                 break
-            if process.poll() is not None and process.returncode not in (None, 0):
-                raise RuntimeError("Connect-MgGraph failed in the sign-in window.")
+
+            poll_result = process.poll()
+            if poll_result is not None and exit_seen_at is None:
+                exit_code = poll_result
+                exit_seen_at = time.monotonic()
+
+            # A completed window can race with the persisted Graph context becoming
+            # visible to a new PowerShell process. Give the context probe a short
+            # grace period instead of failing immediately on process exit.
+            if exit_seen_at is not None and time.monotonic() - exit_seen_at >= 15:
+                break
             time.sleep(2)
+
+        if (data is None or missing_scopes) and exit_code not in (None, 0):
+            raise RuntimeError(
+                f"Connect-MgGraph sign-in window exited with code {exit_code} "
+                "before the Graph context became visible."
+            )
 
     if data is None or missing_scopes:
         return None
@@ -476,12 +512,25 @@ def invoke_graph_powershell_request(
     headers: dict[str, str] | None = None,
 ) -> Any:
     """Execute a Graph request through Microsoft Graph PowerShell."""
-    return _get_graph_powershell_host().invoke(
-        method=method,
-        url=url,
-        body=body,
-        headers=headers,
-    )
+    try:
+        return _get_graph_powershell_host().invoke(
+            method=method,
+            url=url,
+            body=body,
+            headers=headers,
+        )
+    except RuntimeError:
+        # The persistent host can still get into a bad auth state even when a
+        # one-off PowerShell process can silently rehydrate the cached
+        # UseDeviceCode context. Fall back to a single request path so read/write
+        # operations remain usable instead of failing behind host-specific state.
+        _close_graph_powershell_host()
+        return _invoke_graph_powershell_request_once(
+            method=method,
+            url=url,
+            body=body,
+            headers=headers,
+        )
 
 
 def _get_graph_powershell_host() -> GraphPowerShellHost:
@@ -496,6 +545,73 @@ def _get_graph_powershell_host() -> GraphPowerShellHost:
             atexit.register(_close_graph_powershell_host)
             _host_atexit_registered = True
     return _host
+
+
+def _invoke_graph_powershell_request_once(
+    *,
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """Execute a single Graph request in a fresh PowerShell process."""
+    method_json = json.dumps(method)
+    url_json = json.dumps(url)
+    parts = [_PS_PREAMBLE, _scopes_block()]
+    parts.append(
+        "Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null\n"
+    )
+    parts.append(f"$methodValue = {method_json}\n")
+    parts.append(f"$urlValue = {url_json}\n")
+    if body is None:
+        parts.append("$bodyValue = $null\n")
+    else:
+        parts.append(
+            "$bodyValue = ConvertFrom-Json @'\n"
+            f"{json.dumps(body)}\n"
+            "'@\n"
+        )
+    if headers is None:
+        parts.append("$headersValue = $null\n")
+    else:
+        parts.append(
+            "$headersValue = @{}\n"
+            "$headersSource = ConvertFrom-Json @'\n"
+            f"{json.dumps(headers)}\n"
+            "'@\n"
+            "foreach ($p in $headersSource.PSObject.Properties) { $headersValue[$p.Name] = $p.Value }\n"
+        )
+    parts.append(
+        "$statusCode = $null\n"
+        "$responseHeaders = $null\n"
+        "$params = @{\n"
+        "  Method = $methodValue\n"
+        "  Uri = $urlValue\n"
+        "  OutputType = 'PSObject'\n"
+        "  StatusCodeVariable = 'statusCode'\n"
+        "  ResponseHeadersVariable = 'responseHeaders'\n"
+        "}\n"
+        "if ($null -ne $bodyValue) {\n"
+        "  $params.Body = ($bodyValue | ConvertTo-Json -Compress -Depth 64)\n"
+        "  $params.ContentType = 'application/json'\n"
+        "}\n"
+        "if ($null -ne $headersValue) {\n"
+        "  $params.Headers = $headersValue\n"
+        "}\n"
+        "$resp = Invoke-MgGraphRequest @params\n"
+        "$headerMap = @{}\n"
+        "if ($null -ne $responseHeaders) {\n"
+        "  foreach ($entry in $responseHeaders.GetEnumerator()) {\n"
+        "    $headerMap[$entry.Key] = $entry.Value\n"
+        "  }\n"
+        "}\n"
+        "@{\n"
+        "  body = $resp\n"
+        "  status_code = $statusCode\n"
+        "  headers = $headerMap\n"
+        "} | ConvertTo-Json -Compress -Depth 64\n"
+    )
+    return _run_powershell_json("".join(parts), timeout=60)
 
 
 def _close_graph_powershell_host() -> None:

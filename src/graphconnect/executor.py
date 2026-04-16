@@ -55,25 +55,38 @@ async def execute_read(
     start_time = time.monotonic()
 
     url = _build_url(entry, parameters)
-    query_params = _build_query_params(entry, parameters, top, select, filter_expr, expand, order_by)
     headers = _build_headers(entry, correlation_id=correlation_id)
+    method = (entry.method or "GET").upper()
 
     try:
-        data, total_count, has_more, bytes_read, http_status = await _execute_get(
-            url,
-            entry.api_version.value,
-            query_params,
-            top,
-            singleton=entry.singleton,
-            headers=headers,
-        )
+        if method == "POST":
+            request_body = _build_body(entry, parameters, None) or {}
+            raw, bytes_read, http_status = await _execute_mutation(
+                method="POST",
+                url=url,
+                api_version=entry.api_version.value,
+                body=request_body,
+                headers=headers,
+                expected_status=200,
+            )
+            data, total_count, has_more = _normalize_post_read_response(raw, top)
+        else:
+            query_params = _build_query_params(entry, parameters, top, select, filter_expr, expand, order_by)
+            data, total_count, has_more, bytes_read, http_status = await _execute_get(
+                url,
+                entry.api_version.value,
+                query_params,
+                top,
+                singleton=entry.singleton,
+                headers=headers,
+            )
     except Exception as exc:
         elapsed = int((time.monotonic() - start_time) * 1000)
         payload = _map_graph_exception(exc, correlation_id=correlation_id)
         log_operation(
             operation_id=entry.id,
             safety_tier=entry.safety_tier,
-            method="GET",
+            method=method,
             graph_url=url,
             parameters=parameters,
             status="error",
@@ -91,7 +104,7 @@ async def execute_read(
     log_operation(
         operation_id=entry.id,
         safety_tier=entry.safety_tier,
-        method="GET",
+        method=method,
         graph_url=url,
         parameters=parameters,
         status="success",
@@ -245,7 +258,7 @@ async def execute_write(
             correlation_id=correlation_seed,
         )
     except CliError:
-        raise
+        raise  # don't wrap CliError in another CliError below
     except Exception as exc:
         raise CliError(_map_graph_exception(exc, correlation_id=correlation_seed)) from exc
 
@@ -529,9 +542,14 @@ def _interpolate_placeholders(template: str, parameters: dict) -> str:
 
 def _render_template_value(value: Any, parameters: dict) -> Any:
     """Recursively render a body template using parameter values."""
-    if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
-        param_name = value[1:-1]
-        return parameters.get(param_name)
+    if isinstance(value, str):
+        # Exact-match: whole string is a single {param} -- substitute and preserve type.
+        if value.startswith("{") and value.endswith("}") and value.count("{") == 1:
+            param_name = value[1:-1]
+            return parameters.get(param_name)
+        # Inline substitution: replace all {param} occurrences with str(parameter).
+        if "{" in value and "}" in value:
+            return _interpolate_placeholders(value, parameters)
     if isinstance(value, dict):
         rendered: dict[str, Any] = {}
         for key, child in value.items():
@@ -968,6 +986,24 @@ async def _execute_mutation(
         return None, len(native_response), expected_status
 
 
+def _normalize_post_read_response(
+    raw: dict | None,
+    top: int,
+) -> tuple[list[dict], int | None, bool]:
+    """Normalize an Intune reports {Schema, Values} response into row dicts."""
+    if not raw or not isinstance(raw, dict):
+        return [], 0, False
+    schema = raw.get("Schema")
+    values = raw.get("Values")
+    if not schema or not isinstance(values, list):
+        return [], 0, False
+    columns = [c["Column"] for c in schema]
+    rows = [{columns[i]: row[i] for i in range(len(columns))} for row in values]
+    total = raw.get("TotalRowCount") or len(rows)
+    has_more = bool(top and len(rows) >= top and total > len(rows))
+    return rows, total, has_more
+
+
 def _unwrap_graph_response(response: Any, default_status: int) -> tuple[dict[str, Any], int]:
     """Normalize Graph PowerShell responses into (body, status_code)."""
     if isinstance(response, dict) and "body" in response and "status_code" in response:
@@ -985,12 +1021,8 @@ def _unwrap_graph_response(response: Any, default_status: int) -> tuple[dict[str
 
 
 def _expected_success_status(method: str) -> int:
-    """Return the default success status code for a successful mutation."""
-    if method == "POST":
-        return 204
-    if method in ("PATCH", "DELETE", "PUT"):
-        return 204
-    return 200
+    """Return the default success status code for a mutation."""
+    return 204
 
 
 _HTTP_STATUS_RE = re.compile(r"HTTP/1\.\d\s+(\d{3})")

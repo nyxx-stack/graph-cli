@@ -105,7 +105,6 @@ class CatalogEntry(BaseModel):
     tags: list[str] = Field(default_factory=list)
     cmmc_controls: list[str] = Field(default_factory=list)
     examples: list[CatalogExample] = Field(default_factory=list)
-    beta: bool = False
     singleton: bool = False
     supports_top: bool = True
     advanced_query: bool = False

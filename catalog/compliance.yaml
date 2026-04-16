@@ -1,4 +1,27 @@
 operations:
+  - id: "compliance.setting_state_summaries"
+    aliases: ["compliance.policy_setting_summary"]
+    rate_limit_class: "standard"
+    summary: "Get per-setting compliance state summaries for a compliance policy"
+    description: >
+      Shows per-setting pass/fail/unknown counts. Answers which specific
+      setting (Secure Boot, Code Integrity, password, etc.) is causing
+      noncompliance across the fleet.
+    domain: "compliance"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/deviceSettingStateSummaries"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+    tags: ["compliance", "settings", "summary", "device", "evaluation"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
   - id: "compliance.overall_summary"
     aliases: ["compliance.summary"]
     rate_limit_class: "standard"

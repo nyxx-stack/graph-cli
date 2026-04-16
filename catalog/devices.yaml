@@ -126,7 +126,6 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/managedDevices/{device_id}/deviceConfigurationStates"
     api_version: "beta"
-    beta: true
     graph_permissions:
       - "DeviceManagementManagedDevices.Read.All"
     parameters:
@@ -248,6 +247,115 @@ operations:
         description: "Intune managed device ID"
     tags: ["device", "delete", "intune", "managed"]
     cmmc_controls: ["MP.L2-3.8.3"]
+
+  - id: "devices.list_entra"
+    aliases: ["devices.list_directory", "devices.entra"]
+    response_schema: "device"
+    rate_limit_class: "standard"
+    summary: "List all Entra ID device objects (directory-level, not Intune)"
+    description: >
+      Returns device objects from /devices — the Entra directory view. Includes
+      registered, joined, and hybrid-joined devices regardless of Intune enrollment.
+      Use this to see the full device population the Entra portal shows, then compare
+      against devices.list_managed for enrollment gaps.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/devices"
+    api_version: "v1.0"
+    advanced_query: true
+    graph_permissions:
+      - "Device.Read.All"
+    parameters:
+      - name: "trust_type"
+        type: "string"
+        required: false
+        description: "Filter by trustType: AzureAd (joined), ServerAd (hybrid), Workplace (registered)"
+        enum: ["AzureAd", "ServerAd", "Workplace"]
+        maps_to_filter: "trustType eq '{value}'"
+      - name: "is_managed"
+        type: "string"
+        required: false
+        description: "Filter by isManaged (true/false)"
+        enum: ["true", "false"]
+        maps_to_filter: "isManaged eq {value}"
+      - name: "is_compliant"
+        type: "string"
+        required: false
+        description: "Filter by isCompliant (true/false)"
+        enum: ["true", "false"]
+        maps_to_filter: "isCompliant eq {value}"
+      - name: "os_filter"
+        type: "string"
+        required: false
+        description: "Filter by operating system (e.g., 'Windows')"
+        maps_to_filter: "operatingSystem eq '{value}'"
+    default_select:
+      - "id"
+      - "displayName"
+      - "operatingSystem"
+      - "operatingSystemVersion"
+      - "trustType"
+      - "isCompliant"
+      - "isManaged"
+      - "profileType"
+      - "approximateLastSignInDateTime"
+      - "accountEnabled"
+      - "registrationDateTime"
+    default_orderby: "displayName asc"
+    tags: ["entra", "directory", "device", "registered", "joined", "hybrid", "inventory"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+    examples:
+      - description: "List all Entra devices"
+        parameters: {}
+      - description: "List unmanaged devices"
+        parameters: {"is_managed": "false"}
+      - description: "List Workplace-registered (not joined) devices"
+        parameters: {"trust_type": "Workplace"}
+
+  - id: "devices.list_entra_stale"
+    aliases: ["devices.entra_stale"]
+    response_schema: "device"
+    rate_limit_class: "standard"
+    summary: "List Entra devices with no sign-in within N days"
+    description: >
+      Finds Entra directory devices whose approximateLastSignInDateTime is older
+      than the specified threshold. Covers all trust types (Workplace, ServerAd,
+      AzureAd) — not limited to Intune-managed devices.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/devices"
+    api_version: "v1.0"
+    advanced_query: true
+    graph_permissions:
+      - "Device.Read.All"
+    parameters:
+      - name: "days_inactive"
+        type: "integer"
+        required: true
+        description: "Number of days since last sign-in to consider stale"
+        default: 180
+    default_select:
+      - "id"
+      - "displayName"
+      - "operatingSystem"
+      - "operatingSystemVersion"
+      - "trustType"
+      - "isManaged"
+      - "isCompliant"
+      - "approximateLastSignInDateTime"
+      - "accountEnabled"
+      - "registrationDateTime"
+    default_orderby: "approximateLastSignInDateTime asc"
+    computed_filter: "approximateLastSignInDateTime le {cutoff_datetime}"
+    tags: ["entra", "stale", "inactive", "cleanup", "directory"]
+    cmmc_controls: ["CM.L2-3.4.1"]
+    examples:
+      - description: "Devices not signed in for 180 days"
+        parameters: {"days_inactive": "180"}
+      - description: "Devices not signed in for 90 days"
+        parameters: {"days_inactive": "90"}
 
   - id: "devices.delete_entra_device"
     aliases: ["devices.delete_directory_device"]

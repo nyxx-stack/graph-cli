@@ -154,6 +154,46 @@ operations:
       - description: "Status of a specific profile"
         parameters: {"profile_id": "<profile-id>"}
 
+  - id: "policies.settings_catalog_device_status"
+    aliases: ["policies.sc_device_status", "policies.sc_rollout"]
+    rate_limit_class: "standard"
+    summary: "List per-device deployment status for a Settings Catalog policy"
+    description: >
+      Uses the Intune reports POST endpoint getConfigurationPolicyNonComplianceReport
+      to return per-device PolicyStatus for a Settings Catalog / configurationPolicies
+      profile. PolicyStatus values: 0=Unknown, 1=NotApplicable, 2=Compliant,
+      3=Remediated, 4=NonCompliant, 5=Error, 6=Conflict. The response {Schema,Values}
+      is normalized to a list of row dicts by the executor's POST-read path.
+    domain: "policies"
+    safety_tier: "read"
+    method: "POST"
+    endpoint: "/deviceManagement/reports/getConfigurationPolicyNonComplianceReport"
+    api_version: "beta"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID (from policies.list_settings_catalog)"
+    body_template:
+      select:
+        - "IntuneDeviceId"
+        - "DeviceName"
+        - "UPN"
+        - "PolicyStatus"
+        - "PolicyName"
+        - "Manufacturer"
+        - "Model"
+      filter: "(PolicyId eq '{policy_id}')"
+      skip: 0
+      top: 500
+    tags: ["deployment", "status", "rollout", "settings-catalog", "modern", "succeeded", "failed", "error", "conflict", "reports"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+    examples:
+      - description: "Per-device status for a Settings Catalog policy"
+        parameters: {"policy_id": "<policy-id>"}
+
   - id: "policies.profile_settings"
     aliases: ["policies.profile_detail"]
     response_schema: "deviceConfiguration"
@@ -243,6 +283,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
     api_version: "v1.0"
+    singleton: true
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     parameters:
@@ -252,6 +293,62 @@ operations:
         description: "Compliance policy ID"
     tags: ["compliance", "settings", "password", "encryption", "evidence"]
     cmmc_controls: ["CM.L2-3.4.1", "IA.L2-3.5.7"]
+
+  - id: "policies.compliance_policy_device_statuses"
+    aliases: ["policies.compliance_device_status"]
+    rate_limit_class: "standard"
+    summary: "List per-device compliance evaluation status for a compliance policy"
+    description: >
+      Returns per-device status for a specific compliance policy, showing which
+      devices passed/failed and the status detail message explaining the failure.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/deviceStatuses"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+    default_select:
+      - "id"
+      - "deviceDisplayName"
+      - "status"
+      - "lastReportedDateTime"
+      - "userPrincipalName"
+      - "complianceGracePeriodExpirationDateTime"
+    tags: ["compliance", "device", "status", "evaluation", "rollout"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
+  - id: "policies.compliance_policy_setting_states"
+    aliases: ["policies.compliance_setting_states"]
+    rate_limit_class: "standard"
+    summary: "List per-setting compliance states for a specific device under a compliance policy"
+    description: >
+      Returns the individual setting states for a device under a compliance
+      policy device status. Shows which specific settings (Secure Boot, Code
+      Integrity, etc.) passed or failed.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/deviceStatuses/{status_id}/settingStates"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Classic compliance policy ID"
+      - name: "status_id"
+        type: "string"
+        required: true
+        description: "Device status ID from compliance_policy_device_statuses"
+    tags: ["compliance", "settings", "device", "evaluation", "detail"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.list_security_baselines"
     aliases: ["policies.security_baselines"]
@@ -266,7 +363,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/templates"
     api_version: "beta"
-    beta: true
+
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     parameters:
@@ -401,7 +498,7 @@ operations:
     endpoint: "/deviceManagement/compliancePolicies"
     preview_lookup_endpoint: "/deviceManagement/compliancePolicies"
     api_version: "beta"
-    beta: true
+
     expected_success_status: 201
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -424,7 +521,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -450,7 +547,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -477,7 +574,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -503,7 +600,7 @@ operations:
     endpoint: "/deviceManagement/configurationPolicies"
     preview_lookup_endpoint: "/deviceManagement/configurationPolicies"
     api_version: "beta"
-    beta: true
+
     expected_success_status: 201
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -526,7 +623,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -552,7 +649,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -579,7 +676,7 @@ operations:
     preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"
@@ -750,7 +847,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/intents"
     api_version: "beta"
-    beta: true
+
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     default_select:
@@ -774,7 +871,7 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/intents/{intent_id}/getCustomizedSettings()"
     api_version: "beta"
-    beta: true
+
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     parameters:
@@ -800,7 +897,7 @@ operations:
     preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
     execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
     api_version: "beta"
-    beta: true
+
     expected_success_status: 204
     graph_permissions:
       - "DeviceManagementConfiguration.ReadWrite.All"

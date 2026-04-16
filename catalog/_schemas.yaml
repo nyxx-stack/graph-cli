@@ -53,13 +53,22 @@ group:
     owners: {type: "collection", target: "directoryObject"}
 
 device:
-  description: "Entra registered device"
+  description: "Entra directory device object"
   properties:
     id: {type: "string", description: "Directory object ID"}
     deviceId: {type: "string", description: "Alternate device identifier"}
     displayName: {type: "string", description: "Device display name"}
     accountEnabled: {type: "boolean", description: "Whether the device object is enabled"}
     approximateLastSignInDateTime: {type: "dateTimeOffset", description: "Approximate last sign-in time"}
+    isCompliant: {type: "boolean", description: "Compliance state from Entra perspective (null if no policy evaluated)"}
+    isManaged: {type: "boolean", description: "Whether managed by MDM"}
+    managementType: {type: "string", description: "Management type (empty, MDM, etc.)"}
+    operatingSystem: {type: "string", description: "OS type (Windows, macOS, etc.)"}
+    operatingSystemVersion: {type: "string", description: "OS version string"}
+    profileType: {type: "string", description: "RegisteredDevice, SecureVM, Printer, etc."}
+    registrationDateTime: {type: "dateTimeOffset", description: "When the device was registered"}
+    trustType: {type: "string", description: "AzureAd (Entra joined), ServerAd (hybrid), Workplace (registered)"}
+    deviceOwnership: {type: "string", description: "Company, Personal, Unknown"}
 
 deviceCompliancePolicy:
   description: "Intune compliance policy"

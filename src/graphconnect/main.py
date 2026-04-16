@@ -19,7 +19,7 @@ from graphconnect.output import (
     set_quiet,
     stderr_console,
 )
-from graphconnect.types import CliError, ErrorCode, ErrorPayload, SafetyTier
+from graphconnect.types import ApiVersion, CliError, ErrorCode, ErrorPayload, SafetyTier
 
 
 def _fail(
@@ -259,7 +259,7 @@ def catalog_detail(
                 "method": entry.method,
                 "endpoint": entry.endpoint,
                 "api_version": entry.api_version.value,
-                "beta": entry.beta,
+                "beta": entry.api_version == ApiVersion.BETA,
                 "domain": entry.domain,
                 "safety_tier": entry.safety_tier.value,
                 "annotations": entry.annotations(),
@@ -288,7 +288,7 @@ def catalog_detail(
     console.print(f"Method:   {entry.method}")
     console.print(f"Endpoint: {entry.endpoint}")
     console.print(f"API:      {entry.api_version.value}")
-    if entry.beta:
+    if entry.api_version == ApiVersion.BETA:
         console.print("[yellow]Note: Uses beta API, may break without notice[/yellow]")
 
     annotations = entry.annotations()

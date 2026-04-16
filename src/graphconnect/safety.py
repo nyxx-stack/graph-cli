@@ -96,24 +96,12 @@ def validate_token(
     if token.used:
         raise ValueError("Token has already been used. Run the preview again for a new token.")
 
-    if token.expires_at <= now:
-        raise ValueError(
-            f"Token expired at {token.expires_at.isoformat()}. "
-            "Run the preview again for a new token."
-        )
-
     expected_hash = compute_request_hash(operation_id, parameters, body)
     if token.request_hash != expected_hash:
         raise ValueError(
             "Token does not match the current request parameters. "
             "The operation or parameters have changed since the preview. "
             "Run the preview again."
-        )
-
-    if token.operation_id != operation_id:
-        raise ValueError(
-            f"Token was issued for '{token.operation_id}', not '{operation_id}'. "
-            "Run the preview for the correct operation."
         )
 
     token.used = True

@@ -23,8 +23,6 @@ class ApiVersion(str, Enum):
 class AuthMethod(str, Enum):
     DEVICE_CODE = "device_code"
     GRAPH_POWERSHELL = "graph_powershell"
-    AZURE_CLI = "azure_cli"
-    AZURE_POWERSHELL = "azure_powershell"
 
 
 class ErrorCode(str, Enum):
@@ -124,33 +122,14 @@ class CatalogEntry(BaseModel):
             parts.append(p.description)
         return " ".join(parts).lower()
 
-    @property
-    def read_only_hint(self) -> bool:
-        return self.safety_tier == SafetyTier.READ
-
-    @property
-    def destructive_hint(self) -> bool:
-        return self.safety_tier == SafetyTier.DESTRUCTIVE
-
-    @property
-    def idempotent_hint(self) -> bool:
-        # Reads and PUTs are idempotent; POSTs generally are not.
-        if self.safety_tier == SafetyTier.READ:
-            return True
-        return self.method.upper() in ("PUT", "DELETE")
-
-    @property
-    def open_world_hint(self) -> bool:
-        # Graph is an external system.
-        return True
-
     def annotations(self) -> dict[str, bool]:
         """MCP-style tool annotations."""
+        is_read = self.safety_tier == SafetyTier.READ
         return {
-            "readOnlyHint": self.read_only_hint,
-            "destructiveHint": self.destructive_hint,
-            "idempotentHint": self.idempotent_hint,
-            "openWorldHint": self.open_world_hint,
+            "readOnlyHint": is_read,
+            "destructiveHint": self.safety_tier == SafetyTier.DESTRUCTIVE,
+            "idempotentHint": is_read or self.method.upper() in ("PUT", "DELETE"),
+            "openWorldHint": True,
         }
 
 

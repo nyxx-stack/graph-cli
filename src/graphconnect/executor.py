@@ -599,17 +599,6 @@ def _coerce_parameter_value(name: str, value: Any, declared_type: str) -> Any:
                     hint=f"Received: {value}",
                 )
             ) from exc
-    if lowered == "number":
-        try:
-            return float(value)
-        except ValueError as exc:
-            raise CliError(
-                ErrorPayload(
-                    code=ErrorCode.USAGE_ERROR,
-                    message=f"Parameter '{name}' must be a number.",
-                    hint=f"Received: {value}",
-                )
-            ) from exc
     return value
 
 

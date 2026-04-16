@@ -6,7 +6,6 @@ import atexit
 import functools
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,8 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 from azure.identity import (
-    AzureCliCredential,
-    AzurePowerShellCredential,
     DeviceCodeCredential,
     TokenCachePersistenceOptions,
 )
@@ -158,14 +155,12 @@ def _run_powershell_json(
 
 
 def _parse_powershell_json_payload(payload: str) -> Any:
-    """Parse JSON from PowerShell stdout, tolerating extra chatter around the JSON payload."""
+    """Parse JSON from PowerShell stdout, tolerating banner lines before the JSON."""
     try:
         return json.loads(payload)
     except json.JSONDecodeError:
         pass
-
-    decoder = json.JSONDecoder()
-
+    # PowerShell may emit banner lines before the JSON; scan from the end.
     for line in reversed(payload.splitlines()):
         candidate = line.strip()
         if not candidate:
@@ -174,17 +169,6 @@ def _parse_powershell_json_payload(payload: str) -> Any:
             return json.loads(candidate)
         except json.JSONDecodeError:
             continue
-
-    for match in re.finditer(r"(?m)(?P<json>null|true|false|\{|\[)", payload):
-        start = match.start("json")
-        try:
-            value, end = decoder.raw_decode(payload[start:])
-        except json.JSONDecodeError:
-            continue
-        if payload[start + end :].strip():
-            continue
-        return value
-
     raise RuntimeError("PowerShell command did not emit valid JSON.")
 
 
@@ -332,39 +316,6 @@ def _try_graph_powershell_context(force_login: bool = False) -> CredentialContex
     )
 
 
-def _azure_cli_marker_present() -> bool:
-    """Check whether Azure CLI appears to have a persisted login profile."""
-    config_dir = Path(os.environ.get("AZURE_CONFIG_DIR") or (Path.home() / ".azure"))
-    return (config_dir / "azureProfile.json").exists()
-
-
-def _az_powershell_marker_present() -> bool:
-    """Check whether Azure PowerShell appears to have persisted auth state."""
-    base_dir = Path.home() / ".Azure"
-    return (base_dir / "AzureRmContext.json").exists() or (base_dir / "TokenCache.dat").exists()
-
-
-def _try_tool_credentials() -> CredentialContext | None:
-    """Try existing Microsoft developer-tool sign-ins before app-based auth."""
-    for auth_method, builder, marker in (
-        (AuthMethod.AZURE_CLI, AzureCliCredential, _azure_cli_marker_present),
-        (AuthMethod.AZURE_POWERSHELL, AzurePowerShellCredential, _az_powershell_marker_present),
-    ):
-        if not marker():
-            continue
-        try:
-            credential = builder()
-            credential.get_token(GRAPH_RESOURCE_SCOPE)
-            return CredentialContext(
-                credential=credential,
-                scopes=[GRAPH_RESOURCE_SCOPE],
-                auth_method=auth_method,
-            )
-        except Exception:
-            continue
-    return None
-
-
 def _get_credential(force_new: bool = False) -> CredentialContext:
     """Get or create the active credential context."""
     global _cached_context
@@ -384,13 +335,9 @@ def _get_credential(force_new: bool = False) -> CredentialContext:
             )
 
     if context is None:
-        context = _try_tool_credentials()
-
-    if context is None:
         raise RuntimeError(
             "No usable authentication source found. Recommended: use Microsoft Graph PowerShell "
-            "(`Connect-MgGraph -UseDeviceCode`). Optional: sign in with Azure CLI (`az login`) "
-            "or Azure PowerShell (`Connect-AzAccount`). Fallback: set MSGRAPH_TENANT_ID and "
+            "(`Connect-MgGraph -UseDeviceCode`). Fallback: set MSGRAPH_TENANT_ID and "
             f"MSGRAPH_CLIENT_ID, or create {CONFIG_FILE} with tenant_id and client_id."
         )
 
@@ -525,7 +472,7 @@ def invoke_graph_powershell_request(
         # UseDeviceCode context. Fall back to a single request path so read/write
         # operations remain usable instead of failing behind host-specific state.
         _close_graph_powershell_host()
-        return _invoke_graph_powershell_request_once(
+        return _get_graph_powershell_host().invoke(
             method=method,
             url=url,
             body=body,
@@ -546,72 +493,6 @@ def _get_graph_powershell_host() -> GraphPowerShellHost:
             _host_atexit_registered = True
     return _host
 
-
-def _invoke_graph_powershell_request_once(
-    *,
-    method: str,
-    url: str,
-    body: dict[str, Any] | None = None,
-    headers: dict[str, str] | None = None,
-) -> Any:
-    """Execute a single Graph request in a fresh PowerShell process."""
-    method_json = json.dumps(method)
-    url_json = json.dumps(url)
-    parts = [_PS_PREAMBLE, _scopes_block()]
-    parts.append(
-        "Connect-MgGraph -ContextScope CurrentUser -Scopes $requiredScopes -NoWelcome | Out-Null\n"
-    )
-    parts.append(f"$methodValue = {method_json}\n")
-    parts.append(f"$urlValue = {url_json}\n")
-    if body is None:
-        parts.append("$bodyValue = $null\n")
-    else:
-        parts.append(
-            "$bodyValue = ConvertFrom-Json @'\n"
-            f"{json.dumps(body)}\n"
-            "'@\n"
-        )
-    if headers is None:
-        parts.append("$headersValue = $null\n")
-    else:
-        parts.append(
-            "$headersValue = @{}\n"
-            "$headersSource = ConvertFrom-Json @'\n"
-            f"{json.dumps(headers)}\n"
-            "'@\n"
-            "foreach ($p in $headersSource.PSObject.Properties) { $headersValue[$p.Name] = $p.Value }\n"
-        )
-    parts.append(
-        "$statusCode = $null\n"
-        "$responseHeaders = $null\n"
-        "$params = @{\n"
-        "  Method = $methodValue\n"
-        "  Uri = $urlValue\n"
-        "  OutputType = 'PSObject'\n"
-        "  StatusCodeVariable = 'statusCode'\n"
-        "  ResponseHeadersVariable = 'responseHeaders'\n"
-        "}\n"
-        "if ($null -ne $bodyValue) {\n"
-        "  $params.Body = ($bodyValue | ConvertTo-Json -Compress -Depth 64)\n"
-        "  $params.ContentType = 'application/json'\n"
-        "}\n"
-        "if ($null -ne $headersValue) {\n"
-        "  $params.Headers = $headersValue\n"
-        "}\n"
-        "$resp = Invoke-MgGraphRequest @params\n"
-        "$headerMap = @{}\n"
-        "if ($null -ne $responseHeaders) {\n"
-        "  foreach ($entry in $responseHeaders.GetEnumerator()) {\n"
-        "    $headerMap[$entry.Key] = $entry.Value\n"
-        "  }\n"
-        "}\n"
-        "@{\n"
-        "  body = $resp\n"
-        "  status_code = $statusCode\n"
-        "  headers = $headerMap\n"
-        "} | ConvertTo-Json -Compress -Depth 64\n"
-    )
-    return _run_powershell_json("".join(parts), timeout=60)
 
 
 def _close_graph_powershell_host() -> None:

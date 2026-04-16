@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 from rapidfuzz import fuzz
 
-from graphconnect.types import CatalogEntry, SafetyTier
+from graphconnect.types import CatalogEntry
 
 _catalog: list[CatalogEntry] | None = None
 _catalog_index: dict[str, CatalogEntry] | None = None

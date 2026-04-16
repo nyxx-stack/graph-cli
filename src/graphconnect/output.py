@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 import sys
 from typing import Any
 
@@ -182,9 +181,3 @@ def _format_value(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     return str(value)
-
-
-# Honor NO_COLOR explicitly — Rich already does, but keep this as belt-and-suspenders.
-if os.environ.get("NO_COLOR"):
-    console.no_color = True
-    stderr_console.no_color = True

@@ -298,6 +298,7 @@ operations:
       - "trustType"
       - "isCompliant"
       - "isManaged"
+      - "mdmAppId"
       - "profileType"
       - "approximateLastSignInDateTime"
       - "accountEnabled"

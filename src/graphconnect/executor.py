@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ from graphconnect.safety import check_rate_limit, generate_token, validate_token
 from graphconnect.types import (
     AuthMethod,
     CatalogEntry,
+    CatalogProjection,
     CliError,
     ErrorCode,
     ErrorPayload,
@@ -80,6 +82,7 @@ async def execute_read(
                 singleton=entry.singleton,
                 headers=headers,
             )
+        data = _post_process_rows(data, entry.projections)
     except Exception as exc:
         elapsed = int((time.monotonic() - start_time) * 1000)
         payload = _map_graph_exception(exc, correlation_id=correlation_id)
@@ -491,7 +494,13 @@ def _build_query_params(
 
     for param in entry.parameters:
         if param.maps_to_filter and param.name in parameters:
-            mapped = param.maps_to_filter.replace("{value}", str(parameters[param.name]))
+            raw_value = str(parameters[param.name])
+            if param.multi:
+                items = [item.strip() for item in raw_value.split(",") if item.strip()]
+                rendered = ",".join("'" + item.replace("'", "''") + "'" for item in items)
+            else:
+                rendered = raw_value
+            mapped = param.maps_to_filter.replace("{value}", rendered)
             filters.append(mapped)
 
     if filter_expr:
@@ -821,10 +830,33 @@ def _compute_resource_fingerprint(resource: dict[str, Any] | None, field_paths: 
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+@functools.lru_cache(maxsize=256)
+def _split_field_path(path: str) -> tuple[str, ...]:
+    """Split a dotted path, preserving @odata.* keys as single segments.
+
+    Graph responses use OData annotations like `@odata.type`, `@odata.context`.
+    Naive split on "." would break `target.@odata.type` into three segments and
+    fail to find the nested annotation. A token starting with "@" consumes the
+    next token so `@odata.type` stays atomic.
+    """
+    raw = path.split(".")
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        tok = raw[i]
+        if tok.startswith("@") and i + 1 < len(raw):
+            out.append(tok + "." + raw[i + 1])
+            i += 2
+        else:
+            out.append(tok)
+            i += 1
+    return tuple(out)
+
+
 def _extract_field_path(data: Any, path: str) -> Any:
     """Read a dotted field path from a JSON-like structure."""
     current = data
-    for segment in path.split("."):
+    for segment in _split_field_path(path):
         if isinstance(current, dict):
             current = current.get(segment)
         else:
@@ -1014,6 +1046,57 @@ def _expected_success_status(method: str) -> int:
     return 204
 
 
+_MS_DATE_RE = re.compile(r"^/Date\((-?\d+)\)/$")
+
+
+def _post_process_rows(
+    rows: list[dict[str, Any]],
+    projections: list[CatalogProjection],
+) -> list[dict[str, Any]]:
+    """Apply response post-processing: date normalization, then flatten projections."""
+    if not rows:
+        return rows
+    for row in rows:
+        _normalize_values(row)
+        if projections:
+            _apply_projections(row, projections)
+    return rows
+
+
+def _normalize_values(value: Any) -> Any:
+    """Recursively rewrite /Date(ms)/ strings to ISO 8601, mutating containers in place."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            value[k] = _normalize_values(v)
+        return value
+    if isinstance(value, list):
+        for i, v in enumerate(value):
+            value[i] = _normalize_values(v)
+        return value
+    if isinstance(value, str) and value.startswith("/Date("):
+        match = _MS_DATE_RE.match(value)
+        if match:
+            try:
+                ms = int(match.group(1))
+                return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            except (ValueError, OverflowError, OSError):
+                # OSError (Errno 22) fires on Windows for out-of-range epoch values
+                # (e.g. pre-1970 `/Date(-1)/` sentinels or year-9999 placeholders).
+                # Fall back to the literal string so the row still serializes.
+                return value
+    return value
+
+
+def _apply_projections(row: dict[str, Any], projections: list[CatalogProjection]) -> None:
+    """Flatten declared nested paths into top-level columns on the row."""
+    for proj in projections:
+        raw = _extract_field_path(row, proj.path)
+        if proj.enum_map and raw is not None:
+            row[proj.name] = proj.enum_map.get(str(raw), raw)
+        else:
+            row[proj.name] = raw
+
+
 _HTTP_STATUS_RE = re.compile(r"HTTP/1\.\d\s+(\d{3})")
 _GRAPH_CODE_RE = re.compile(r'"code"\s*:\s*"([^"]*)"')
 _REASON_PHRASE_RE = re.compile(r"does not indicate success:\s*(\w+)", re.IGNORECASE)
@@ -1022,6 +1105,16 @@ _REASON_PHRASE_RE = re.compile(r"does not indicate success:\s*(\w+)", re.IGNOREC
 _PS_REASON_TO_STATUS = {
     status.phrase.replace(" ", "").lower(): status.value for status in HTTPStatus
 }
+
+
+def _specialized_hint(message: str, http_status: int | None) -> str | None:
+    """Return a focused hint for known Graph quirks. None if nothing matches.
+
+    Keep this list short and empirical — hints are loud, and a wrong hint
+    ("known Graph issue — retry later") is worse than no hint because it
+    sends the operator on a retry loop instead of examining the request.
+    """
+    return None
 
 
 def _map_graph_exception(exc: Exception, correlation_id: str | None = None) -> ErrorPayload:
@@ -1048,11 +1141,13 @@ def _map_graph_exception(exc: Exception, correlation_id: str | None = None) -> E
             correlation_id=correlation_id,
         )
 
+    specialized = _specialized_hint(message, http_status)
+
     if http_status is None:
         return ErrorPayload(
             code=ErrorCode.UPSTREAM_ERROR,
             message=message.strip().splitlines()[0] if message else "Upstream Graph call failed.",
-            hint="Check audit.jsonl for the full trace.",
+            hint=specialized or "Check audit.jsonl for the full trace.",
             correlation_id=correlation_id,
             graph_error_code=graph_error_code,
         )
@@ -1078,7 +1173,7 @@ def _map_graph_exception(exc: Exception, correlation_id: str | None = None) -> E
     return ErrorPayload(
         code=code,
         message=first_line,
-        hint=hints.get(code),
+        hint=specialized or hints.get(code),
         retryable=code in (ErrorCode.THROTTLED, ErrorCode.UPSTREAM_ERROR),
         http_status=http_status,
         graph_error_code=graph_error_code,

@@ -70,6 +70,20 @@ class CatalogParameter(BaseModel):
     default: Any = None
     enum: list[str] | None = None
     maps_to_filter: str | None = None
+    multi: bool = False  # Comma-separated input → OData list (e.g. id in ('a','b'))
+
+
+class CatalogProjection(BaseModel):
+    """Flatten/enrich a nested response field into a top-level column.
+
+    The `path` is dotted (e.g. `target.groupId` or `settingInstance.settingDefinitionId`).
+    `enum_map` optionally maps codes to a readable label at `name`; the raw value at
+    `path` is untouched, so numeric sorts still work when `name != path`.
+    """
+
+    name: str
+    path: str
+    enum_map: dict[str, str] | None = None
 
 
 class CatalogExample(BaseModel):
@@ -109,6 +123,7 @@ class CatalogEntry(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     response_schema: str | None = None  # Key into catalog/_schemas.yaml
     rate_limit_class: str | None = None  # Free-form tag: light|standard|heavy|throttle_sensitive
+    projections: list[CatalogProjection] = Field(default_factory=list)
 
     @property
     def search_text(self) -> str:

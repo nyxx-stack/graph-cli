@@ -86,18 +86,29 @@ def print_result(
     total: int | None = None,
     has_more: bool = False,
     envelope_extras: dict[str, Any] | None = None,
+    envelope: bool = False,
 ) -> None:
-    """Render operation results; pagination hints go to stderr (chatter, not payload)."""
+    """Render operation results; pagination hints go to stderr (chatter, not payload).
+
+    In JSON mode, stdout is the data array directly so callers don't need to
+    unwrap `.data` — envelope metadata (count, has_more, correlation_id, etc.)
+    goes to stderr as a single chatter line. Pass `envelope=True` to restore
+    the wrapped `{data, count, has_more, ...}` shape for scripts.
+    """
     if output_format == "json":
-        envelope: dict[str, Any] = {
-            "data": data,
-            "count": len(data),
-            "total": total,
-            "has_more": has_more,
-        }
-        if envelope_extras:
-            envelope.update(envelope_extras)
-        print_json(envelope)
+        if envelope:
+            wrapped: dict[str, Any] = {
+                "data": data,
+                "count": len(data),
+                "total": total,
+                "has_more": has_more,
+            }
+            if envelope_extras:
+                wrapped.update(envelope_extras)
+            print_json(wrapped)
+            return
+        print_json(data)
+        _emit_envelope_chatter(len(data), total=total, has_more=has_more, extras=envelope_extras)
         return
     if output_format == "csv":
         print_csv(data)
@@ -109,6 +120,27 @@ def print_result(
             stderr_note(f"[showing {len(data)} of {total}, use --top {total} for all]")
         else:
             stderr_note(f"[showing {len(data)}, more results available — increase --top]")
+
+
+def _emit_envelope_chatter(
+    count: int,
+    *,
+    total: int | None,
+    has_more: bool,
+    extras: dict[str, Any] | None,
+) -> None:
+    """Single stderr line summarizing the envelope metadata stripped from stdout."""
+    if _QUIET:
+        return
+    parts = [f"{count} rows"]
+    if has_more:
+        parts.append(f"more available (total={total})" if total else "more available (raise --top)")
+    if extras:
+        if cid := extras.get("correlation_id"):
+            parts.append(f"correlation_id={cid}")
+        if ms := extras.get("execution_time_ms"):
+            parts.append(f"{ms}ms")
+    stderr_note("[" + " | ".join(parts) + "]")
 
 
 # -- Chatter / stderr -------------------------------------------------------

@@ -7,7 +7,14 @@ import pytest
 from graphconnect import audit, executor, safety
 from graphconnect.catalog import get_entry
 from graphconnect.executor import execute_read, execute_write, preview_write
-from graphconnect.types import CatalogEntry, CliError, ErrorCode, SafetyTier
+from graphconnect.types import (
+    CatalogEntry,
+    CatalogParameter,
+    CatalogProjection,
+    CliError,
+    ErrorCode,
+    SafetyTier,
+)
 
 
 def _entry(**overrides) -> CatalogEntry:
@@ -236,3 +243,163 @@ def test_conditional_access_update_user_targets_merges_current_policy(
 def test_map_graph_exception_codes(message, expected):
     payload = executor._map_graph_exception(RuntimeError(message))
     assert payload.code == expected
+
+
+def test_specialized_hint_returns_none_by_default():
+    # Regression guard: future hints must be empirical (reproducible via probe)
+    # and must not send operators on retry loops past a root-cause bug. The
+    # previous "known Graph issue — retry in 10-15 min" for classic
+    # /deviceStatuses 500 was wrong — the real bug was $select in our catalog.
+    assert executor._specialized_hint("anything", 500) is None
+
+
+def test_normalize_values_falls_back_on_out_of_range_timestamp():
+    # Intune classic profiles emit /Date(-1)/ as a "never" sentinel; on Windows
+    # this raises OSError [Errno 22] from datetime.fromtimestamp. The normalizer
+    # must fall back to the literal string instead of crashing the whole op.
+    row = {"complianceGracePeriodExpirationDateTime": "/Date(-1)/"}
+    out = executor._normalize_values(row)
+    # Either the literal sentinel or a valid ISO 8601 string is acceptable;
+    # what's NOT acceptable is the call raising.
+    assert out["complianceGracePeriodExpirationDateTime"] is not None
+
+
+def test_normalize_values_converts_ms_date_strings_to_iso():
+    row = {
+        "lastSyncDateTime": "/Date(1776772080000)/",
+        "nested": {"createdDateTime": "/Date(1635505590813)/"},
+        "passthrough": "/Date(not-a-number)/",
+        "normal": "2026-04-22T00:00:00Z",
+    }
+    out = executor._normalize_values(row)
+    assert out["lastSyncDateTime"].startswith("2026-")
+    assert out["lastSyncDateTime"].endswith("Z")
+    assert out["nested"]["createdDateTime"].startswith("2021-")
+    # Non-numeric content stays literal (still useful for debugging).
+    assert out["passthrough"] == "/Date(not-a-number)/"
+    assert out["normal"] == "2026-04-22T00:00:00Z"
+
+
+def test_split_field_path_preserves_odata_annotations():
+    assert executor._split_field_path("target.@odata.type") == ("target", "@odata.type")
+    assert executor._split_field_path("settingInstance.@odata.type") == (
+        "settingInstance",
+        "@odata.type",
+    )
+    assert executor._split_field_path("a.b.c") == ("a", "b", "c")
+
+
+def test_extract_field_path_reads_odata_annotation():
+    row = {"target": {"@odata.type": "#microsoft.graph.groupAssignmentTarget"}}
+    assert (
+        executor._extract_field_path(row, "target.@odata.type")
+        == "#microsoft.graph.groupAssignmentTarget"
+    )
+
+
+def test_apply_projections_flattens_and_maps_enum():
+    projections = [
+        CatalogProjection(name="groupId", path="target.groupId"),
+        CatalogProjection(
+            name="Status",
+            path="PolicyStatus",
+            enum_map={"5": "Error", "6": "Conflict"},
+        ),
+    ]
+    row = {"target": {"groupId": "abc-123"}, "PolicyStatus": 5}
+    executor._apply_projections(row, projections)
+    assert row["groupId"] == "abc-123"
+    assert row["Status"] == "Error"
+    # Raw numeric column preserved.
+    assert row["PolicyStatus"] == 5
+
+
+def test_post_process_rows_handles_missing_paths_as_none():
+    projections = [CatalogProjection(name="groupId", path="target.groupId")]
+    out = executor._post_process_rows([{"id": "x"}], projections)
+    assert out == [{"id": "x", "groupId": None}]
+
+
+def test_execute_read_applies_projections_and_date_normalization(monkeypatch):
+    async def fake_execute_get(*args, **kwargs):
+        return (
+            [
+                {
+                    "target": {"groupId": "group-1"},
+                    "PolicyStatus": 6,
+                    "lastSyncDateTime": "/Date(1635505590813)/",
+                }
+            ],
+            1,
+            False,
+            64,
+            200,
+        )
+
+    monkeypatch.setattr(executor, "_execute_get", fake_execute_get)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        projections=[
+            CatalogProjection(name="groupId", path="target.groupId"),
+            CatalogProjection(
+                name="Status",
+                path="PolicyStatus",
+                enum_map={"6": "Conflict"},
+            ),
+        ],
+    )
+    result = asyncio.run(execute_read(entry, top=10))
+    row = result.data[0]
+    assert row["groupId"] == "group-1"
+    assert row["Status"] == "Conflict"
+    assert row["lastSyncDateTime"].startswith("2021-")
+
+
+def test_multi_filter_expands_comma_list_to_odata_in(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_execute_get(url, api_version, query_params, top, singleton=False, headers=None):
+        captured["query_params"] = dict(query_params)
+        return [], 0, False, 0, 200
+
+    monkeypatch.setattr(executor, "_execute_get", fake_execute_get)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        parameters=[
+            CatalogParameter(
+                name="group_ids",
+                multi=True,
+                maps_to_filter="id in ({value})",
+            )
+        ],
+    )
+    asyncio.run(execute_read(entry, parameters={"group_ids": "a,b,c"}, top=10))
+    assert captured["query_params"]["$filter"] == "id in ('a','b','c')"
+
+
+def test_multi_filter_escapes_single_quotes(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_execute_get(url, api_version, query_params, top, singleton=False, headers=None):
+        captured["query_params"] = dict(query_params)
+        return [], 0, False, 0, 200
+
+    monkeypatch.setattr(executor, "_execute_get", fake_execute_get)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        parameters=[
+            CatalogParameter(
+                name="names",
+                multi=True,
+                maps_to_filter="displayName in ({value})",
+            )
+        ],
+    )
+    asyncio.run(execute_read(entry, parameters={"names": "O'Brien,plain"}, top=10))
+    assert captured["query_params"]["$filter"] == "displayName in ('O''Brien','plain')"

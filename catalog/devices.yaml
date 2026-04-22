@@ -383,3 +383,56 @@ operations:
         description: "Entra device object ID"
     tags: ["device", "delete", "entra", "directory", "stale"]
     cmmc_controls: ["MP.L2-3.8.3"]
+
+  - id: "devices.compliance_policy_states"
+    aliases: ["devices.policy_states", "devices.device_compliance_states"]
+    rate_limit_class: "standard"
+    summary: "List per-policy compliance state for one device"
+    description: >
+      For a given managed device, returns each compliance policy and its
+      effective state (compliant, noncompliant, error, conflict, notApplicable).
+      First step when drilling into why a device shows noncompliant.
+      Follow up with devices.compliance_setting_states to see which specific
+      setting (e.g. BitLocker, Defender) failed.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/deviceCompliancePolicyStates"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managedDevice id"
+    tags: ["compliance", "device", "policy-state", "drilldown", "noncompliant"]
+    cmmc_controls: ["CM.L2-3.4.2", "AU.L2-3.3.1"]
+
+  - id: "devices.compliance_setting_states"
+    aliases: ["devices.setting_states"]
+    rate_limit_class: "standard"
+    summary: "List per-setting compliance state for one device's policy"
+    description: >
+      Shows which specific settings on a compliance policy passed/failed/errored
+      for a given device. Required to identify the exact setting (e.g.
+      "Require BitLocker", "Defender real-time protection") that's keeping a
+      device noncompliant.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/managedDevices/{device_id}/deviceCompliancePolicyStates/{state_id}/settingStates"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: true
+        description: "Intune managedDevice id"
+      - name: "state_id"
+        type: "string"
+        required: true
+        description: "deviceCompliancePolicyState id (from devices.compliance_policy_states)"
+    tags: ["compliance", "device", "setting-state", "drilldown", "noncompliant"]
+    cmmc_controls: ["CM.L2-3.4.2"]

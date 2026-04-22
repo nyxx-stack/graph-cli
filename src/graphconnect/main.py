@@ -339,6 +339,7 @@ def read_operation(
     expand: Annotated[str | None, typer.Option("--expand", help="OData expand expression")] = None,
     order_by: Annotated[str | None, typer.Option("--orderby", help="OData orderby expression")] = None,
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json|csv")] = None,
+    envelope: Annotated[bool, typer.Option("--envelope", help="Wrap JSON output in {data, count, has_more, ...} instead of emitting rows directly.")] = False,
 ) -> None:
     """Execute a read-only catalog operation against Microsoft Graph."""
     import asyncio
@@ -401,6 +402,7 @@ def read_operation(
             "correlation_id": result.correlation_id,
             "execution_time_ms": result.execution_time_ms,
         },
+        envelope=envelope,
     )
 
 

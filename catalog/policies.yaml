@@ -79,6 +79,28 @@ operations:
     tags: ["compliance", "policy", "intune", "settings-catalog", "modern"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
+  - id: "policies.list_mdm_enrollment"
+    aliases: ["policies.mdm_auto_enrollment", "policies.mobility_management"]
+    rate_limit_class: "standard"
+    summary: "List MDM/MAM mobility management policies (Intune auto-enrollment scope)"
+    description: >
+      Returns mobility management policies from /policies/mobileDeviceManagementPolicies.
+      The Intune policy (well-known id 0000000a-0000-0000-c000-000000000000) is the
+      one whose appliesTo field controls Entra-joined device auto-enrollment to Intune:
+      None = no auto-enrollment, Some = scoped to specific groups, All = every Entra
+      user's joined devices auto-enroll. If corp Entra-joined devices show MDM=None
+      in the portal, this is the first thing to check.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/policies/mobileDeviceManagementPolicies"
+    api_version: "beta"
+    graph_permissions:
+      - "Policy.Read.All"
+    supports_top: false
+    tags: ["mdm", "enrollment", "auto-enrollment", "mobility", "policies", "intune"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
+
   - id: "policies.profile_assignments"
     aliases: ["policies.assignments"]
     rate_limit_class: "standard"
@@ -98,6 +120,15 @@ operations:
         type: "string"
         required: true
         description: "Configuration profile ID"
+    projections:
+      - name: "groupId"
+        path: "target.groupId"
+      - name: "targetType"
+        path: "target.@odata.type"
+      - name: "assignmentFilterId"
+        path: "target.deviceAndAppManagementAssignmentFilterId"
+      - name: "assignmentFilterType"
+        path: "target.deviceAndAppManagementAssignmentFilterType"
     tags: ["assignments", "targeting", "groups", "profile", "classic"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
@@ -120,6 +151,15 @@ operations:
         type: "string"
         required: true
         description: "Settings Catalog policy ID (from policies.list_settings_catalog)"
+    projections:
+      - name: "groupId"
+        path: "target.groupId"
+      - name: "targetType"
+        path: "target.@odata.type"
+      - name: "assignmentFilterId"
+        path: "target.deviceAndAppManagementAssignmentFilterId"
+      - name: "assignmentFilterType"
+        path: "target.deviceAndAppManagementAssignmentFilterType"
     tags: ["assignments", "targeting", "groups", "settings-catalog", "modern"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
@@ -129,7 +169,11 @@ operations:
     summary: "List per-device deployment status for a configuration profile"
     description: >
       Shows Succeeded/Failed/Pending/Error status per device for a specific
-      profile. Essential for rollout tracking.
+      profile. Essential for rollout tracking. `$select` is intentionally
+      omitted — legacy windows10GeneralConfiguration profiles 500 when
+      `$select` projects fields against the polymorphic deviceStatus type.
+      Graph returns all useful fields (id, deviceDisplayName, userName,
+      deviceModel, status, lastReportedDateTime, userPrincipalName) by default.
     domain: "policies"
     safety_tier: "read"
     method: "GET"
@@ -142,12 +186,6 @@ operations:
         type: "string"
         required: true
         description: "Configuration profile ID"
-    default_select:
-      - "id"
-      - "deviceDisplayName"
-      - "status"
-      - "lastReportedDateTime"
-      - "userPrincipalName"
     tags: ["deployment", "status", "rollout", "succeeded", "failed", "pending"]
     cmmc_controls: ["CM.L2-3.4.2"]
     examples:
@@ -188,6 +226,17 @@ operations:
       filter: "(PolicyId eq '{policy_id}')"
       skip: 0
       top: 500
+    projections:
+      - name: "Status"
+        path: "PolicyStatus"
+        enum_map:
+          "0": "Unknown"
+          "1": "NotApplicable"
+          "2": "Compliant"
+          "3": "Remediated"
+          "4": "NonCompliant"
+          "5": "Error"
+          "6": "Conflict"
     tags: ["deployment", "status", "rollout", "settings-catalog", "modern", "succeeded", "failed", "error", "conflict", "reports"]
     cmmc_controls: ["CM.L2-3.4.2"]
     examples:
@@ -241,6 +290,11 @@ operations:
         type: "string"
         required: true
         description: "Settings Catalog policy ID"
+    projections:
+      - name: "settingDefinitionId"
+        path: "settingInstance.settingDefinitionId"
+      - name: "settingInstanceType"
+        path: "settingInstance.@odata.type"
     tags: ["settings", "details", "evidence", "configuration", "settings-catalog"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 

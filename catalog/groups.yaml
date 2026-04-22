@@ -21,6 +21,12 @@ operations:
         required: false
         description: "Filter group display name (startsWith)"
         maps_to_filter: "startswith(displayName, '{value}')"
+      - name: "group_ids"
+        type: "string"
+        required: false
+        description: "Comma-separated group object IDs to look up directly (skips full-list scan)"
+        multi: true
+        maps_to_filter: "id in ({value})"
     default_select:
       - "id"
       - "displayName"

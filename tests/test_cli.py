@@ -161,6 +161,66 @@ def test_read_promotes_filter_from_param(monkeypatch):
     assert captured["filter_expr"] == "startswith(userPrincipalName,'DWilliams')"
 
 
+def test_read_json_default_emits_rows_only(monkeypatch):
+    _stub_read_response(monkeypatch, rows=[{"id": "a"}, {"id": "b"}])
+
+    result = runner.invoke(app, ["read", "users.list_all", "--format", "json"])
+
+    import json as _json
+
+    assert result.exit_code == 0
+    parsed = _json.loads(result.stdout)
+    # Default stdout is the array — no unwrap needed.
+    assert parsed == [{"id": "a"}, {"id": "b"}]
+    # Envelope metadata lives on stderr as chatter.
+    assert "rows" in (result.stderr or "")
+
+
+def test_read_envelope_flag_restores_wrapper(monkeypatch):
+    _stub_read_response(monkeypatch, rows=[{"id": "a"}])
+
+    result = runner.invoke(
+        app,
+        ["read", "users.list_all", "--format", "json", "--envelope"],
+    )
+
+    import json as _json
+
+    assert result.exit_code == 0
+    parsed = _json.loads(result.stdout)
+    assert isinstance(parsed, dict)
+    assert parsed["data"] == [{"id": "a"}]
+    assert "count" in parsed
+    assert "correlation_id" in parsed
+
+
+def _stub_read_response(monkeypatch, rows: list[dict]) -> None:
+    entry = CatalogEntry(
+        id="users.list_all",
+        summary="List users",
+        description="Test",
+        domain="users",
+        safety_tier=SafetyTier.READ,
+        method="GET",
+        endpoint="/users",
+    )
+    monkeypatch.setattr("graphconnect.catalog.get_entry", lambda operation_id: entry)
+
+    async def fake_execute_read(entry, parameters, top, select, filter_expr, expand, order_by):
+        class Result:
+            operation_id = entry.id
+            item_count = len(rows)
+            has_more = False
+            data = rows
+            execution_time_ms = 1
+            request_id = "req"
+            correlation_id = "corr-xyz"
+
+        return Result()
+
+    monkeypatch.setattr("graphconnect.executor.execute_read", fake_execute_read)
+
+
 def _result(name: str, status: str, detail: str = "ok", fix: str = ""):
     from graphconnect.doctor import CheckResult
 

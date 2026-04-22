@@ -71,6 +71,11 @@ class CatalogParameter(BaseModel):
     enum: list[str] | None = None
     maps_to_filter: str | None = None
     multi: bool = False  # Comma-separated input → OData list (e.g. id in ('a','b'))
+    # enum value → OData filter clause. Use for params where each value translates
+    # to a different filter expression (e.g. status_filter=failure →
+    # status/errorCode ne 0, status_filter=success → status/errorCode eq 0).
+    # Takes precedence over maps_to_filter when the incoming value matches a key.
+    value_map: dict[str, str] | None = None
 
 
 class CatalogProjection(BaseModel):
@@ -124,6 +129,7 @@ class CatalogEntry(BaseModel):
     response_schema: str | None = None  # Key into catalog/_schemas.yaml
     rate_limit_class: str | None = None  # Free-form tag: light|standard|heavy|throttle_sensitive
     projections: list[CatalogProjection] = Field(default_factory=list)
+    drop_paths: list[str] = Field(default_factory=list)
 
     @property
     def search_text(self) -> str:
@@ -151,6 +157,7 @@ class CatalogEntry(BaseModel):
 class OperationResult(BaseModel):
     operation_id: str
     item_count: int = 0
+    total_count: int | None = None
     has_more: bool = False
     data: list[dict[str, Any]] = Field(default_factory=list)
     execution_time_ms: int = 0

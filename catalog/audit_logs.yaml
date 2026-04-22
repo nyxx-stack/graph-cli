@@ -33,6 +33,8 @@ operations:
       - "activityDisplayName"
       - "activityDateTime"
       - "category"
+      - "loggedByService"
+      - "correlationId"
       - "initiatedBy"
       - "targetResources"
       - "result"
@@ -54,26 +56,40 @@ operations:
     description: >
       Returns user sign-in activity including success/failure, MFA status,
       and conditional access evaluation. Limited to 30 days on P1/P2.
+      Filtering on status/errorCode requires beta + ConsistencyLevel: eventual,
+      so this op points at beta and sets advanced_query.
     domain: "audit_logs"
     safety_tier: "read"
     method: "GET"
     endpoint: "/auditLogs/signIns"
-    api_version: "v1.0"
+    api_version: "beta"
+    advanced_query: true
     graph_permissions:
       - "AuditLog.Read.All"
     parameters:
       - name: "status_filter"
         type: "string"
         required: false
-        description: "Filter by sign-in result (success/failure)"
+        description: "Filter by sign-in result. success → errorCode eq 0; failure → errorCode ne 0."
         enum: ["success", "failure"]
+        value_map:
+          success: "status/errorCode eq 0"
+          failure: "status/errorCode ne 0"
+      - name: "user_id"
+        type: "string"
+        required: false
+        description: "Filter by user object ID (userId). Use for per-user drill-down."
+        maps_to_filter: "userId eq '{value}'"
     default_select:
       - "id"
       - "userDisplayName"
       - "userPrincipalName"
       - "appDisplayName"
+      - "ipAddress"
+      - "clientAppUsed"
       - "status"
       - "conditionalAccessStatus"
+      - "authenticationRequirement"
       - "createdDateTime"
     default_orderby: "createdDateTime desc"
     tags: ["sign-in", "login", "authentication", "failed", "mfa", "conditional access"]

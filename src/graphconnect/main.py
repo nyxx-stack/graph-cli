@@ -231,6 +231,7 @@ def catalog_list(
 
 
 @catalog_app.command("detail")
+@catalog_app.command("show")
 def catalog_detail(
     operation_id: Annotated[str, typer.Argument(help="Operation ID (e.g., devices.list_managed)")],
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
@@ -338,10 +339,10 @@ def read_operation(
     filter_expr: Annotated[str | None, typer.Option("--filter", help="OData filter expression")] = None,
     expand: Annotated[str | None, typer.Option("--expand", help="OData expand expression")] = None,
     order_by: Annotated[str | None, typer.Option("--orderby", help="OData orderby expression")] = None,
-    output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json|csv")] = None,
+    output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json|compact|csv — compact emits ndjson (one row per line)")] = None,
     envelope: Annotated[bool, typer.Option("--envelope", help="Wrap JSON output in {data, count, has_more, ...} instead of emitting rows directly.")] = False,
 ) -> None:
-    """Execute a read-only catalog operation against Microsoft Graph."""
+    """Execute a read-only catalog operation against Microsoft Graph. Pass -n 0 to fetch every page."""
     import asyncio
 
     from graphconnect.catalog import get_entry
@@ -394,7 +395,7 @@ def read_operation(
         data=result.data,
         output_format=fmt,
         title=f"{operation_id} ({result.item_count} items, {result.execution_time_ms}ms)",
-        total=result.item_count if result.has_more else None,
+        total=result.total_count,
         has_more=result.has_more,
         envelope_extras={
             "operation_id": result.operation_id,

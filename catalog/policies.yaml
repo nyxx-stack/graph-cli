@@ -22,6 +22,10 @@ operations:
       - "lastModifiedDateTime"
       - "createdDateTime"
     default_orderby: "displayName asc"
+    default_expand: "assignments"
+    drop_paths:
+      - "assignments@odata.context"
+      - "assignments[].target.@odata.type"
     tags: ["profiles", "configuration", "policies", "intune", "settings", "classic"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -49,6 +53,12 @@ operations:
       - "technologies"
       - "lastModifiedDateTime"
       - "createdDateTime"
+    default_expand: "assignments"
+    drop_paths:
+      - "assignments@odata.context"
+      - "assignments[].source"
+      - "assignments[].sourceId"
+      - "assignments[].target.@odata.type"
     tags: ["profiles", "configuration", "policies", "intune", "settings-catalog", "modern"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -129,6 +139,7 @@ operations:
         path: "target.deviceAndAppManagementAssignmentFilterId"
       - name: "assignmentFilterType"
         path: "target.deviceAndAppManagementAssignmentFilterType"
+    drop_paths: ["target"]
     tags: ["assignments", "targeting", "groups", "profile", "classic"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
@@ -160,7 +171,40 @@ operations:
         path: "target.deviceAndAppManagementAssignmentFilterId"
       - name: "assignmentFilterType"
         path: "target.deviceAndAppManagementAssignmentFilterType"
+    drop_paths: ["target", "source", "sourceId"]
     tags: ["assignments", "targeting", "groups", "settings-catalog", "modern"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.compliance_policy_assignments"
+    aliases: ["policies.compliance_assignments"]
+    rate_limit_class: "standard"
+    summary: "List group assignments for a classic compliance policy"
+    description: >
+      Shows which groups a classic (deviceCompliancePolicies) policy is assigned to.
+      Use policies.list_compliance_policies to get the policy_id.
+    domain: "policies"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/assignments"
+    api_version: "v1.0"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Compliance policy ID (from policies.list_compliance_policies)"
+    projections:
+      - name: "groupId"
+        path: "target.groupId"
+      - name: "targetType"
+        path: "target.@odata.type"
+      - name: "assignmentFilterId"
+        path: "target.deviceAndAppManagementAssignmentFilterId"
+      - name: "assignmentFilterType"
+        path: "target.deviceAndAppManagementAssignmentFilterType"
+    drop_paths: ["target"]
+    tags: ["assignments", "targeting", "groups", "compliance", "classic"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
   - id: "policies.profile_device_status"
@@ -186,6 +230,7 @@ operations:
         type: "string"
         required: true
         description: "Configuration profile ID"
+    drop_paths: ["deviceModel"]
     tags: ["deployment", "status", "rollout", "succeeded", "failed", "pending"]
     cmmc_controls: ["CM.L2-3.4.2"]
     examples:
@@ -295,6 +340,10 @@ operations:
         path: "settingInstance.settingDefinitionId"
       - name: "settingInstanceType"
         path: "settingInstance.@odata.type"
+      - name: "choiceValue"
+        path: "settingInstance.choiceSettingValue.value"
+      - name: "simpleValue"
+        path: "settingInstance.simpleSettingValue.value"
     tags: ["settings", "details", "evidence", "configuration", "settings-catalog"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -320,6 +369,10 @@ operations:
       - "lastModifiedDateTime"
       - "createdDateTime"
     default_orderby: "displayName asc"
+    default_expand: "assignments"
+    drop_paths:
+      - "assignments@odata.context"
+      - "assignments[].target.@odata.type"
     tags: ["compliance", "policy", "enforcement", "password", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -367,13 +420,9 @@ operations:
         type: "string"
         required: true
         description: "Classic compliance policy ID"
-    default_select:
-      - "id"
-      - "deviceDisplayName"
-      - "status"
-      - "lastReportedDateTime"
-      - "userPrincipalName"
-      - "complianceGracePeriodExpirationDateTime"
+    # NOTE: no default_select. Legacy /deviceCompliancePolicies/{id}/deviceStatuses
+    # 500s when $select projects fields against the polymorphic deviceStatus type
+    # (e.g. windows10CompliancePolicy). Graph returns the full row by default.
     tags: ["compliance", "device", "status", "evaluation", "rollout"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -404,13 +453,15 @@ operations:
     tags: ["compliance", "settings", "device", "evaluation", "detail"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
-  - id: "policies.list_security_baselines"
-    aliases: ["policies.security_baselines"]
+  - id: "policies.list_baseline_templates"
+    aliases: ["policies.security_baselines", "policies.list_security_baselines"]
     rate_limit_class: "standard"
-    summary: "List security baseline profiles (BETA)"
+    summary: "List Intune baseline templates available in the tenant"
     description: >
-      Returns endpoint security baseline profiles. Note: this uses the /beta
-      API and the deviceManagement/templates endpoint which may change.
+      Returns the Intune /deviceManagement/templates catalog — the set of baseline
+      templates Microsoft publishes (MDM Security Baseline, Defender for Endpoint,
+      Edge baseline, etc.), whether or not the tenant has deployed any of them.
+      For *deployed* baseline intents, use policies.list_intent_profiles.
       Requires DeviceManagementSecurity.Read.All or DeviceManagementConfiguration.Read.All.
     domain: "policies"
     safety_tier: "read"

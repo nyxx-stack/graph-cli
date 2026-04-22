@@ -30,6 +30,11 @@ operations:
       - "enrolledDateTime"
       - "managementAgent"
       - "userPrincipalName"
+      - "deviceEnrollmentType"
+      - "isEncrypted"
+      - "model"
+      - "manufacturer"
+      - "serialNumber"
     default_orderby: "deviceName asc"
     tags: ["inventory", "fleet", "enrollment", "mdm", "managed"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
@@ -105,6 +110,8 @@ operations:
       - "complianceState"
       - "lastSyncDateTime"
       - "operatingSystem"
+      - "osVersion"
+      - "enrolledDateTime"
       - "userPrincipalName"
     tags: ["compliance", "posture", "noncompliant", "health"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "CA.L2-3.12.1"]

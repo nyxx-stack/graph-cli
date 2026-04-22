@@ -88,6 +88,7 @@ def test_preview_and_execute_detect_resource_drift(isolated_graphconnect_state, 
         safety_tier=SafetyTier.DESTRUCTIVE,
         method="DELETE",
         endpoint="/deviceManagement/managedDevices/{device_id}",
+        parameters=[CatalogParameter(name="device_id", type="string", required=True)],
         preview_lookup_endpoint="/deviceManagement/managedDevices/{device_id}",
         preview_lookup_select=["id", "deviceName", "lastSyncDateTime"],
         execute_fingerprint_fields=["id", "deviceName", "lastSyncDateTime"],
@@ -379,6 +380,100 @@ def test_multi_filter_expands_comma_list_to_odata_in(monkeypatch):
     )
     asyncio.run(execute_read(entry, parameters={"group_ids": "a,b,c"}, top=10))
     assert captured["query_params"]["$filter"] == "id in ('a','b','c')"
+
+
+def test_value_map_selects_per_enum_filter_clause(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_execute_get(url, api_version, query_params, top, singleton=False, headers=None):
+        captured["query_params"] = dict(query_params)
+        return [], 0, False, 0, 200
+
+    monkeypatch.setattr(executor, "_execute_get", fake_execute_get)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        endpoint="/auditLogs/signIns",
+        parameters=[
+            CatalogParameter(
+                name="status_filter",
+                enum=["success", "failure"],
+                value_map={
+                    "success": "status/errorCode eq 0",
+                    "failure": "status/errorCode ne 0",
+                },
+            )
+        ],
+    )
+    asyncio.run(execute_read(entry, parameters={"status_filter": "failure"}, top=10))
+    assert captured["query_params"]["$filter"] == "status/errorCode ne 0"
+
+
+def test_validate_parameters_rejects_unknown_key():
+    entry = _entry(
+        parameters=[CatalogParameter(name="device_id", type="string", required=True)],
+        endpoint="/deviceManagement/managedDevices/{device_id}",
+    )
+    with pytest.raises(CliError) as exc:
+        executor._validate_parameters(entry, {"device_id": "x", "bogus_key": "y"})
+    assert exc.value.payload.code == ErrorCode.USAGE_ERROR
+    assert "bogus_key" in exc.value.payload.message
+
+
+def test_validate_parameters_rejects_missing_path_placeholder():
+    entry = _entry(
+        parameters=[CatalogParameter(name="device_id", type="string", required=True)],
+        endpoint="/deviceManagement/managedDevices/{device_id}",
+    )
+    with pytest.raises(CliError) as exc:
+        executor._validate_parameters(entry, {})
+    assert exc.value.payload.code == ErrorCode.USAGE_ERROR
+    assert "device_id" in exc.value.payload.message
+
+
+def test_audit_url_attaches_query_string():
+    assert executor._audit_url("/users", {"$top": "10", "$filter": "a eq 'b'"}).startswith("/users?")
+    assert executor._audit_url("/users", {}) == "/users"
+    assert executor._audit_url("/users", None) == "/users"
+
+
+def test_audit_directory_logs_postprocess_parses_json_string_values():
+    rows = [
+        {
+            "targetResources": [
+                {
+                    "modifiedProperties": [
+                        {"displayName": "DisplayName", "oldValue": "[]", "newValue": '["Pilot Ring 1"]'},
+                        {"displayName": "SecurityEnabled", "oldValue": "[]", "newValue": "[true]"},
+                        {"displayName": "Other", "oldValue": None, "newValue": None},
+                    ]
+                }
+            ]
+        }
+    ]
+    executor._apply_operation_specific_postprocess("audit.directory_logs", rows)
+    props = rows[0]["targetResources"][0]["modifiedProperties"]
+    assert props[0]["oldValue"] == []
+    assert props[0]["newValue"] == ["Pilot Ring 1"]
+    assert props[1]["newValue"] == [True]
+    assert props[2]["oldValue"] is None  # unchanged
+
+
+def test_users_list_privileged_postprocess_flattens_member_upns():
+    rows = [
+        {
+            "displayName": "Global Administrator",
+            "members": [
+                {"userPrincipalName": "a@x.com"},
+                {"userPrincipalName": "b@x.com"},
+                {"displayName": "no upn"},
+            ],
+        }
+    ]
+    executor._apply_operation_specific_postprocess("users.list_privileged", rows)
+    assert rows[0]["memberUPNs"] == ["a@x.com", "b@x.com", None]
+    assert rows[0]["memberCount"] == 3
 
 
 def test_multi_filter_escapes_single_quotes(monkeypatch):

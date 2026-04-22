@@ -57,7 +57,11 @@ operations:
       - "userDisplayName"
       - "isMfaRegistered"
       - "isMfaCapable"
+      - "isPasswordlessCapable"
+      - "isAdmin"
       - "methodsRegistered"
+      - "lastUpdatedDateTime"
+      - "userType"
     tags: ["mfa", "authentication", "multi-factor", "authenticator", "enforcement"]
     cmmc_controls: ["IA.L2-3.5.3"]
     examples:
@@ -95,6 +99,10 @@ operations:
       - "accountEnabled"
       - "userType"
       - "createdDateTime"
+      - "mail"
+      - "jobTitle"
+      - "department"
+      - "officeLocation"
     default_orderby: "displayName asc"
     tags: ["users", "directory", "identity", "accounts"]
     cmmc_controls: ["AC.L2-3.1.1"]

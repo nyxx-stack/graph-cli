@@ -451,6 +451,11 @@ def get_auth_context(force_new: bool = False) -> CredentialContext:
     return _get_credential(force_new=force_new)
 
 
+def peek_user_principal() -> str | None:
+    """Return the cached session UPN without triggering auth, or None if not yet resolved."""
+    return _cached_context.user_principal if _cached_context else None
+
+
 def invoke_graph_powershell_request(
     *,
     method: str,

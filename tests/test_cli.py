@@ -134,6 +134,7 @@ def test_read_promotes_filter_from_param(monkeypatch):
         class Result:
             operation_id = entry.id
             item_count = 0
+            total_count = None
             has_more = False
             data = []
             execution_time_ms = 1
@@ -210,6 +211,7 @@ def _stub_read_response(monkeypatch, rows: list[dict]) -> None:
         class Result:
             operation_id = entry.id
             item_count = len(rows)
+            total_count = None
             has_more = False
             data = rows
             execution_time_ms = 1

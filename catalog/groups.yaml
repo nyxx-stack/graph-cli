@@ -68,6 +68,15 @@ operations:
       - "id"
       - "displayName"
       - "userPrincipalName"
+    projections:
+      - name: "kind"
+        path: "@odata.type"
+        enum_map:
+          "#microsoft.graph.device": "device"
+          "#microsoft.graph.user": "user"
+          "#microsoft.graph.group": "group"
+          "#microsoft.graph.servicePrincipal": "servicePrincipal"
+    drop_paths: ["@odata.type"]
     tags: ["members", "membership", "group", "targeting"]
     cmmc_controls: ["AC.L2-3.1.1"]
     examples:
@@ -133,6 +142,45 @@ operations:
         description: "Member object ID to remove"
     tags: ["remove", "member", "group", "assignment", "$ref"]
     cmmc_controls: ["AC.L2-3.1.5", "AC.L2-3.1.1"]
+
+  - id: "groups.rename"
+    aliases: ["groups.update_metadata", "groups.edit"]
+    response_schema: "group"
+    rate_limit_class: "standard"
+    summary: "Rename a group or update its description"
+    description: >
+      PATCH a group's displayName and/or description. Supply at least one of
+      display_name or description. Does not touch membership rules — use
+      groups.update_rule for that.
+    domain: "groups"
+    safety_tier: "write"
+    method: "PATCH"
+    endpoint: "/groups/{group_id}"
+    body_template:
+      displayName: "{display_name}"
+      description: "{description}"
+    preview_lookup_endpoint: "/groups/{group_id}"
+    preview_lookup_select: ["id", "displayName", "description"]
+    execute_fingerprint_fields: ["id", "displayName", "description"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "Group.ReadWrite.All"
+    parameters:
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target group object ID"
+      - name: "display_name"
+        type: "string"
+        required: false
+        description: "New display name"
+      - name: "description"
+        type: "string"
+        required: false
+        description: "New description"
+    tags: ["group", "rename", "description", "metadata", "patch"]
+    cmmc_controls: ["AC.L2-3.1.1"]
 
   - id: "groups.update_rule"
     aliases: ["groups.rule_update", "groups.dynamic_rule"]

@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlencode
 
 from graphconnect.audit import log_operation
+from graphconnect.auth import peek_user_principal
 from graphconnect.safety import check_rate_limit, generate_token, validate_token
 from graphconnect.types import (
     AuthMethod,
@@ -52,6 +53,7 @@ async def execute_read(
 
     parameters = _apply_parameter_defaults(entry, parameters or {})
     parameters = _normalize_parameter_types(entry, parameters)
+    _validate_parameters(entry, parameters)
     request_id = _new_id()
     correlation_id = _new_id()
     start_time = time.monotonic()
@@ -59,6 +61,11 @@ async def execute_read(
     url = _build_url(entry, parameters)
     headers = _build_headers(entry, correlation_id=correlation_id)
     method = (entry.method or "GET").upper()
+    query_params: dict[str, str] = {}
+    if method != "POST":
+        query_params = _build_query_params(entry, parameters, top, select, filter_expr, expand, order_by)
+    audit_url = _audit_url(url, query_params)
+    user_principal = peek_user_principal()
 
     try:
         if method == "POST":
@@ -73,7 +80,6 @@ async def execute_read(
             )
             data, total_count, has_more = _normalize_post_read_response(raw, top)
         else:
-            query_params = _build_query_params(entry, parameters, top, select, filter_expr, expand, order_by)
             data, total_count, has_more, bytes_read, http_status = await _execute_get(
                 url,
                 entry.api_version.value,
@@ -82,7 +88,7 @@ async def execute_read(
                 singleton=entry.singleton,
                 headers=headers,
             )
-        data = _post_process_rows(data, entry.projections)
+        data = _post_process_rows(data, entry.projections, entry.drop_paths, entry.id)
     except Exception as exc:
         elapsed = int((time.monotonic() - start_time) * 1000)
         payload = _map_graph_exception(exc, correlation_id=correlation_id)
@@ -90,8 +96,9 @@ async def execute_read(
             operation_id=entry.id,
             safety_tier=entry.safety_tier,
             method=method,
-            graph_url=url,
+            graph_url=audit_url,
             parameters=parameters,
+            user_principal=user_principal,
             status="error",
             execution_time_ms=elapsed,
             error=str(exc),
@@ -108,8 +115,9 @@ async def execute_read(
         operation_id=entry.id,
         safety_tier=entry.safety_tier,
         method=method,
-        graph_url=url,
+        graph_url=audit_url,
         parameters=parameters,
+        user_principal=user_principal,
         status="success",
         http_status=http_status,
         item_count=len(data),
@@ -122,6 +130,7 @@ async def execute_read(
     return OperationResult(
         operation_id=entry.id,
         item_count=len(data),
+        total_count=total_count,
         has_more=has_more,
         data=data,
         execution_time_ms=elapsed,
@@ -139,11 +148,13 @@ async def preview_write(
     """Generate a dry-run preview for a write operation."""
     parameters = _apply_parameter_defaults(entry, parameters or {})
     parameters = _normalize_parameter_types(entry, parameters)
+    _validate_parameters(entry, parameters)
     url = _build_url(entry, parameters)
 
     correlation_id = _new_id()
     idempotency_key = _new_id()
     start_time = time.monotonic()
+    user_principal = peek_user_principal()
 
     try:
         request_body = await _resolve_request_body(
@@ -166,6 +177,7 @@ async def preview_write(
             method=entry.method,
             graph_url=url,
             parameters=parameters,
+            user_principal=user_principal,
             status="error",
             execution_time_ms=elapsed,
             error=str(exc),
@@ -184,6 +196,7 @@ async def preview_write(
             method=entry.method,
             graph_url=url,
             parameters=parameters,
+            user_principal=user_principal,
             status="error",
             execution_time_ms=elapsed,
             error=str(exc),
@@ -218,6 +231,7 @@ async def preview_write(
         method=entry.method,
         graph_url=url,
         parameters=parameters,
+        user_principal=user_principal,
         status="preview",
         http_status=preview_lookup["http_status"],
         preview_shown=True,
@@ -252,6 +266,7 @@ async def execute_write(
     """Execute a write operation after validating the confirmation token."""
     parameters = _apply_parameter_defaults(entry, parameters or {})
     parameters = _normalize_parameter_types(entry, parameters)
+    _validate_parameters(entry, parameters)
     correlation_seed = _new_id()
     try:
         request_body = await _resolve_request_body(
@@ -302,6 +317,7 @@ async def execute_write(
     url = _build_url(entry, parameters)
     headers = _build_headers(entry, correlation_id=correlation_id, idempotency_key=idempotency_key)
     start_time = time.monotonic()
+    user_principal = peek_user_principal()
 
     try:
         await _validate_resource_fingerprint(
@@ -327,6 +343,7 @@ async def execute_write(
             method=entry.method,
             graph_url=url,
             parameters=parameters,
+            user_principal=user_principal,
             status="error",
             execution_time_ms=elapsed,
             confirm_token=confirm_token,
@@ -348,6 +365,7 @@ async def execute_write(
             method=entry.method,
             graph_url=url,
             parameters=parameters,
+            user_principal=user_principal,
             status="error",
             execution_time_ms=elapsed,
             confirm_token=confirm_token,
@@ -369,6 +387,7 @@ async def execute_write(
         method=entry.method,
         graph_url=url,
         parameters=parameters,
+        user_principal=user_principal,
         status="success",
         http_status=http_status,
         execution_time_ms=elapsed,
@@ -410,6 +429,43 @@ def _apply_parameter_defaults(entry: CatalogEntry, parameters: dict) -> dict:
         if param.name not in merged and param.default is not None:
             merged[param.name] = param.default
     return merged
+
+
+def _validate_parameters(entry: CatalogEntry, parameters: dict) -> None:
+    """Reject unknown parameters and unresolved path placeholders up front.
+
+    Unknown keys catch typos (e.g. `-p polcy_id=...`) that would otherwise be
+    silently dropped. Unresolved `{placeholder}` in the endpoint catches missing
+    required params *before* we send a URL-encoded `%7Bdevice_id%7D` to Graph
+    and earn a confusing 400.
+    """
+    declared = {p.name for p in entry.parameters}
+    unknown = sorted(k for k in parameters if k not in declared)
+    if unknown:
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.USAGE_ERROR,
+                message=f"Unknown parameter(s) for {entry.id}: {', '.join(unknown)}",
+                hint=(
+                    f"Declared: {', '.join(sorted(declared)) or '(none)'}. "
+                    f"Run `graphconnect catalog detail {entry.id}` to see the full parameter list."
+                ),
+            )
+        )
+
+    placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+    referenced = set(placeholder_re.findall(entry.endpoint))
+    def _is_empty(v: object) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+    missing = sorted(name for name in referenced if _is_empty(parameters.get(name)))
+    if missing:
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.USAGE_ERROR,
+                message=f"{entry.id} requires parameter(s): {', '.join(missing)}",
+                hint=f"Example: --param {missing[0]}=<value>",
+            )
+        )
 
 
 def _normalize_parameter_types(entry: CatalogEntry, parameters: dict) -> dict:
@@ -465,7 +521,7 @@ def _build_query_params(
             query["$expand"] = expand_expr
         return query
 
-    if entry.supports_top:
+    if entry.supports_top and top > 0:
         query["$top"] = str(min(top, 999))
 
     select_fields = select or entry.default_select
@@ -493,8 +549,15 @@ def _build_query_params(
             filters.append(computed)
 
     for param in entry.parameters:
-        if param.maps_to_filter and param.name in parameters:
-            raw_value = str(parameters[param.name])
+        if param.name not in parameters:
+            continue
+        raw_value = str(parameters[param.name])
+        # value_map wins over maps_to_filter: each enum value produces its own
+        # OData clause (e.g. status_filter=failure → status/errorCode ne 0).
+        if param.value_map and raw_value in param.value_map:
+            filters.append(param.value_map[raw_value])
+            continue
+        if param.maps_to_filter:
             if param.multi:
                 items = [item.strip() for item in raw_value.split(",") if item.strip()]
                 rendered = ",".join("'" + item.replace("'", "''") + "'" for item in items)
@@ -663,14 +726,20 @@ async def _resolve_request_body(
     return request_body
 
 
+def _attach_query(url: str, query_params: dict[str, str] | None) -> str:
+    if not query_params:
+        return url
+    return f"{url}?{urlencode(query_params, safe='$,')}"
+
+
 def _compose_full_url(url: str, api_version: str, query_params: dict[str, str] | None = None) -> str:
     """Compose a fully-qualified Graph URL from the relative path and query parameters."""
-    full_url = f"https://graph.microsoft.com/{api_version}{url}"
-    if query_params:
-        query_string = urlencode(query_params, safe="$,")
-        if query_string:
-            full_url += f"?{query_string}"
-    return full_url
+    return _attach_query(f"https://graph.microsoft.com/{api_version}{url}", query_params)
+
+
+def _audit_url(url: str, query_params: dict[str, str] | None) -> str:
+    """Relative Graph URL with query string attached, for audit log reproduction."""
+    return _attach_query(url, query_params)
 
 
 async def _resolve_preview_lookup(
@@ -885,16 +954,22 @@ async def _paginate_graph_response(
     first_url: str,
     top: int,
 ) -> tuple[list[dict], int | None, bool, int, int]:
-    """Walk @odata.nextLink pages up to `top` items, summing raw payload bytes from each fetch."""
+    """Walk @odata.nextLink pages up to `top` items, summing raw payload bytes from each fetch.
+
+    Pass top<=0 for unbounded pagination (fetch every page).
+    """
+    unbounded = top <= 0
     response_data, bytes_seen, http_status = await fetch(first_url)
     total_count = response_data.get("@odata.count")
     next_link = response_data.get("@odata.nextLink")
     collected = list(response_data.get("value", []))
-    while next_link and len(collected) < top:
+    while next_link and (unbounded or len(collected) < top):
         response_data, page_bytes, _ = await fetch(next_link)
         collected.extend(response_data.get("value", []))
         next_link = response_data.get("@odata.nextLink")
         bytes_seen += page_bytes
+    if unbounded:
+        return collected, total_count, False, bytes_seen, http_status
     has_more = len(collected) > top or next_link is not None
     return collected[:top], total_count, has_more, bytes_seen, http_status
 
@@ -1052,15 +1127,80 @@ _MS_DATE_RE = re.compile(r"^/Date\((-?\d+)\)/$")
 def _post_process_rows(
     rows: list[dict[str, Any]],
     projections: list[CatalogProjection],
+    drop_paths: list[str] | None = None,
+    operation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Apply response post-processing: date normalization, then flatten projections."""
+    """Apply response post-processing: date normalization, projections, drops, op-specific fixups."""
     if not rows:
         return rows
     for row in rows:
         _normalize_values(row)
         if projections:
             _apply_projections(row, projections)
+        if drop_paths:
+            for path in drop_paths:
+                _drop_path(row, path)
+    if operation_id:
+        _apply_operation_specific_postprocess(operation_id, rows)
     return rows
+
+
+def _drop_path(obj: dict[str, Any], path: str) -> None:
+    """Remove a field from a dict, honoring `array[].subfield` and dotted paths.
+
+    A literal key match takes precedence over dotted traversal so paths whose
+    key names embed a dot (e.g. `@odata.type`, `assignments@odata.context`) work
+    without escaping.
+    """
+    if "[]" in path:
+        head, _, rest = path.partition("[]")
+        array_key = head.rstrip(".")
+        sub_path = rest.lstrip(".")
+        target = obj.get(array_key) if array_key else obj
+        if not isinstance(target, list):
+            return
+        for item in target:
+            if isinstance(item, dict) and sub_path:
+                _drop_path(item, sub_path)
+        return
+    if path in obj:
+        obj.pop(path, None)
+        return
+    if "." in path:
+        head, _, rest = path.partition(".")
+        child = obj.get(head)
+        if isinstance(child, dict):
+            _drop_path(child, rest)
+
+
+def _apply_operation_specific_postprocess(operation_id: str, rows: list[dict[str, Any]]) -> None:
+    """Per-op response shape fixups that can't be expressed via generic projections."""
+    if operation_id == "audit.directory_logs":
+        # modifiedProperties.oldValue/newValue are JSON-encoded strings
+        # (e.g. '[]', '["Pilot Ring 1"]'). Consumers always re-parse, so do it
+        # once here and emit structured values instead.
+        for row in rows:
+            for target in row.get("targetResources") or []:
+                for prop in (target or {}).get("modifiedProperties") or []:
+                    for field in ("oldValue", "newValue"):
+                        value = prop.get(field)
+                        if isinstance(value, str) and value and (value[0] in "[{" or value in ('"', "null")):
+                            try:
+                                prop[field] = json.loads(value)
+                            except (ValueError, TypeError):
+                                pass
+    elif operation_id == "users.list_privileged":
+        # Full user objects ship under `members` — flatten a UPN roster + count
+        # so callers don't have to dive into the nested blob for common queries.
+        for row in rows:
+            members = row.get("members") or []
+            if isinstance(members, list):
+                row["memberUPNs"] = [
+                    (m or {}).get("userPrincipalName")
+                    for m in members
+                    if isinstance(m, dict)
+                ]
+                row["memberCount"] = len(members)
 
 
 def _normalize_values(value: Any) -> Any:

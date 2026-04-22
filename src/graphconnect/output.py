@@ -68,6 +68,12 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
+def print_ndjson(data: list[dict[str, Any]]) -> None:
+    """Print data as newline-delimited JSON (one compact row per line)."""
+    for row in data:
+        print(json.dumps(row, default=str, separators=(",", ":")))
+
+
 def print_csv(data: list[dict[str, Any]]) -> None:
     """Print data as CSV to stdout."""
     if not data:
@@ -110,16 +116,20 @@ def print_result(
         print_json(data)
         _emit_envelope_chatter(len(data), total=total, has_more=has_more, extras=envelope_extras)
         return
+    if output_format == "compact":
+        print_ndjson(data)
+        _emit_envelope_chatter(len(data), total=total, has_more=has_more, extras=envelope_extras)
+        return
     if output_format == "csv":
         print_csv(data)
         return
 
     print_table(data, title=title)
     if has_more and not is_quiet():
-        if total:
-            stderr_note(f"[showing {len(data)} of {total}, use --top {total} for all]")
+        if total and total > len(data):
+            stderr_note(f"[showing {len(data)} of {total} — pass -n 0 for all]")
         else:
-            stderr_note(f"[showing {len(data)}, more results available — increase --top]")
+            stderr_note(f"[showing {len(data)}, more pages available — pass -n 0 for all]")
 
 
 def _emit_envelope_chatter(
@@ -134,7 +144,10 @@ def _emit_envelope_chatter(
         return
     parts = [f"{count} rows"]
     if has_more:
-        parts.append(f"more available (total={total})" if total else "more available (raise --top)")
+        if total and total > count:
+            parts.append(f"of {total} total — pass -n 0 for all")
+        else:
+            parts.append("more pages — pass -n 0 for all")
     if extras:
         if cid := extras.get("correlation_id"):
             parts.append(f"correlation_id={cid}")

@@ -45,13 +45,24 @@ def _load_catalog() -> list[CatalogEntry]:
 
 
 def search_catalog(query: str, top: int = 10) -> list[dict]:
-    """Fuzzy search catalog entries by query string. Returns sorted by relevance."""
+    """Fuzzy search catalog entries by query string. Returns sorted by relevance.
+
+    Exact ID / alias matches always rank first (score 100); substring ID/alias
+    matches also get a floor of 90 so operators can find an op by its literal
+    name even when fuzzy scoring would rank keyword hits higher.
+    """
     catalog = _load_catalog()
     query_lower = query.lower()
 
     scored = []
     for entry in catalog:
-        score = fuzz.token_set_ratio(query_lower, entry.search_text)
+        identifiers = [entry.id.lower(), *(a.lower() for a in entry.aliases)]
+        if query_lower in identifiers:
+            score = 100
+        elif any(query_lower in ident for ident in identifiers):
+            score = max(fuzz.token_set_ratio(query_lower, entry.search_text), 90)
+        else:
+            score = fuzz.token_set_ratio(query_lower, entry.search_text)
         if score > 30:
             scored.append({"entry": entry, "score": score})
 

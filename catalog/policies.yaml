@@ -59,7 +59,7 @@ operations:
       - "assignments[].source"
       - "assignments[].sourceId"
       - "assignments[].target.@odata.type"
-    tags: ["profiles", "configuration", "policies", "intune", "settings-catalog", "modern"]
+    tags: ["profiles", "configuration", "policies", "intune", "settings-catalog", "modern", "bitlocker", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.list_modern_compliance"
@@ -135,6 +135,11 @@ operations:
         path: "target.groupId"
       - name: "targetType"
         path: "target.@odata.type"
+        enum_map:
+          "#microsoft.graph.groupAssignmentTarget": "include-group"
+          "#microsoft.graph.exclusionGroupAssignmentTarget": "exclude-group"
+          "#microsoft.graph.allDevicesAssignmentTarget": "all-devices"
+          "#microsoft.graph.allLicensedUsersAssignmentTarget": "all-users"
       - name: "assignmentFilterId"
         path: "target.deviceAndAppManagementAssignmentFilterId"
       - name: "assignmentFilterType"
@@ -167,6 +172,11 @@ operations:
         path: "target.groupId"
       - name: "targetType"
         path: "target.@odata.type"
+        enum_map:
+          "#microsoft.graph.groupAssignmentTarget": "include-group"
+          "#microsoft.graph.exclusionGroupAssignmentTarget": "exclude-group"
+          "#microsoft.graph.allDevicesAssignmentTarget": "all-devices"
+          "#microsoft.graph.allLicensedUsersAssignmentTarget": "all-users"
       - name: "assignmentFilterId"
         path: "target.deviceAndAppManagementAssignmentFilterId"
       - name: "assignmentFilterType"
@@ -199,6 +209,11 @@ operations:
         path: "target.groupId"
       - name: "targetType"
         path: "target.@odata.type"
+        enum_map:
+          "#microsoft.graph.groupAssignmentTarget": "include-group"
+          "#microsoft.graph.exclusionGroupAssignmentTarget": "exclude-group"
+          "#microsoft.graph.allDevicesAssignmentTarget": "all-devices"
+          "#microsoft.graph.allLicensedUsersAssignmentTarget": "all-users"
       - name: "assignmentFilterId"
         path: "target.deviceAndAppManagementAssignmentFilterId"
       - name: "assignmentFilterType"
@@ -282,7 +297,7 @@ operations:
           "4": "NonCompliant"
           "5": "Error"
           "6": "Conflict"
-    tags: ["deployment", "status", "rollout", "settings-catalog", "modern", "succeeded", "failed", "error", "conflict", "reports"]
+    tags: ["deployment", "status", "rollout", "settings-catalog", "modern", "succeeded", "failed", "error", "conflict", "reports", "bitlocker", "encryption"]
     cmmc_controls: ["CM.L2-3.4.2"]
     examples:
       - description: "Per-device status for a Settings Catalog policy"
@@ -344,7 +359,7 @@ operations:
         path: "settingInstance.choiceSettingValue.value"
       - name: "simpleValue"
         path: "settingInstance.simpleSettingValue.value"
-    tags: ["settings", "details", "evidence", "configuration", "settings-catalog"]
+    tags: ["settings", "details", "evidence", "configuration", "settings-catalog", "bitlocker", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "policies.list_compliance_policies"
@@ -423,6 +438,7 @@ operations:
     # NOTE: no default_select. Legacy /deviceCompliancePolicies/{id}/deviceStatuses
     # 500s when $select projects fields against the polymorphic deviceStatus type
     # (e.g. windows10CompliancePolicy). Graph returns the full row by default.
+    dedupe_by: ["deviceDisplayName"]
     tags: ["compliance", "device", "status", "evaluation", "rollout"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 

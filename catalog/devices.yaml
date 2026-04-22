@@ -30,13 +30,26 @@ operations:
       - "enrolledDateTime"
       - "managementAgent"
       - "userPrincipalName"
+      - "userId"
       - "deviceEnrollmentType"
       - "isEncrypted"
       - "model"
       - "manufacturer"
       - "serialNumber"
+      - "azureADDeviceId"
+      - "managedDeviceOwnerType"
+      - "totalStorageSpaceInBytes"
+      - "freeStorageSpaceInBytes"
+      - "partnerReportedThreatState"
     default_orderby: "deviceName asc"
-    tags: ["inventory", "fleet", "enrollment", "mdm", "managed"]
+    projections:
+      - name: "ownership"
+        path: "managedDeviceOwnerType"
+        enum_map:
+          "company": "corporate"
+          "personal": "byod"
+          "unknown": "unknown"
+    tags: ["inventory", "fleet", "enrollment", "mdm", "managed", "bitlocker", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
     examples:
       - description: "List all Windows devices"
@@ -148,6 +161,7 @@ operations:
       - "version"
       - "settingCount"
       - "userPrincipalName"
+    dedupe_by: ["id"]
     tags: ["configuration", "state", "device", "policy", "intune", "troubleshooting"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
@@ -299,6 +313,7 @@ operations:
         maps_to_filter: "operatingSystem eq '{value}'"
     default_select:
       - "id"
+      - "deviceId"
       - "displayName"
       - "operatingSystem"
       - "operatingSystemVersion"
@@ -311,7 +326,14 @@ operations:
       - "accountEnabled"
       - "registrationDateTime"
     default_orderby: "displayName asc"
-    tags: ["entra", "directory", "device", "registered", "joined", "hybrid", "inventory"]
+    projections:
+      - name: "joinKind"
+        path: "trustType"
+        enum_map:
+          "ServerAd": "hybrid-joined"
+          "AzureAd": "entra-joined"
+          "Workplace": "registered"
+    tags: ["entra", "directory", "device", "registered", "joined", "hybrid", "inventory", "stale", "cleanup"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
     examples:
       - description: "List all Entra devices"
@@ -413,6 +435,7 @@ operations:
         type: "string"
         required: true
         description: "Intune managedDevice id"
+    dedupe_by: ["id"]
     tags: ["compliance", "device", "policy-state", "drilldown", "noncompliant"]
     cmmc_controls: ["CM.L2-3.4.2", "AU.L2-3.3.1"]
 
@@ -441,5 +464,6 @@ operations:
         type: "string"
         required: true
         description: "deviceCompliancePolicyState id (from devices.compliance_policy_states)"
+    dedupe_by: ["setting", "state"]
     tags: ["compliance", "device", "setting-state", "drilldown", "noncompliant"]
     cmmc_controls: ["CM.L2-3.4.2"]

@@ -124,7 +124,7 @@ def test_read_promotes_filter_from_param(monkeypatch):
 
     monkeypatch.setattr("graphconnect.catalog.get_entry", lambda operation_id: entry)
 
-    async def fake_execute_read(entry, parameters, top, select, filter_expr, expand, order_by):
+    async def fake_execute_read(entry, parameters, top, select, filter_expr, expand, order_by, dedupe=True):
         captured["parameters"] = parameters
         captured["filter_expr"] = filter_expr
         captured["select"] = select
@@ -207,7 +207,7 @@ def _stub_read_response(monkeypatch, rows: list[dict]) -> None:
     )
     monkeypatch.setattr("graphconnect.catalog.get_entry", lambda operation_id: entry)
 
-    async def fake_execute_read(entry, parameters, top, select, filter_expr, expand, order_by):
+    async def fake_execute_read(entry, parameters, top, select, filter_expr, expand, order_by, dedupe=True):
         class Result:
             operation_id = entry.id
             item_count = len(rows)

@@ -130,6 +130,11 @@ class CatalogEntry(BaseModel):
     rate_limit_class: str | None = None  # Free-form tag: light|standard|heavy|throttle_sensitive
     projections: list[CatalogProjection] = Field(default_factory=list)
     drop_paths: list[str] = Field(default_factory=list)
+    # Drop rows whose tuple of these field values matches a previously-seen row
+    # (keeps first occurrence). Use on endpoints where Graph returns the same
+    # logical row once per user on multi-user devices. Callers can override with
+    # --no-dedupe on `read`.
+    dedupe_by: list[str] = Field(default_factory=list)
 
     @property
     def search_text(self) -> str:

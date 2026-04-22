@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import sys
+from collections import Counter
 from typing import Any
 
 from rich.console import Console
@@ -211,6 +212,61 @@ def emit_error(payload: ErrorPayload, output_format: str | None = None) -> int:
         if payload.correlation_id:
             stderr_console.print(f"  [dim]correlation_id:[/dim] {payload.correlation_id}")
     return exit_for_code(payload.code)
+
+
+# -- Client-side transforms (eliminate bash post-processing) ---------------
+
+
+def apply_group_by(
+    data: list[dict[str, Any]],
+    fields: list[str],
+    *,
+    count: bool = True,
+) -> list[dict[str, Any]]:
+    """Group rows by the value tuple of `fields`; return one row per group.
+
+    When `count=True` (the default), adds a `count` column. Null/missing values
+    render as the empty string in the grouped row so the output is flat-JSON-safe.
+    """
+    if not data or not fields:
+        return data
+    grouped: Counter[tuple] = Counter()
+    for row in data:
+        key = tuple(row.get(f) for f in fields)
+        grouped[key] += 1
+    out: list[dict[str, Any]] = []
+    for key, n in grouped.most_common():
+        row = {fields[i]: key[i] for i in range(len(fields))}
+        if count:
+            row["count"] = n
+        out.append(row)
+    return out
+
+
+def apply_sort(data: list[dict[str, Any]], spec: str) -> list[dict[str, Any]]:
+    """Sort rows by `<field>` or `<field>:desc`. Nulls sort last in both directions.
+
+    Applies client-side after projections, so it works on projected columns that
+    OData `$orderby` cannot reach.
+    """
+    if not data or not spec:
+        return data
+    field, _, direction = spec.partition(":")
+    field = field.strip()
+    desc = direction.strip().lower() == "desc"
+
+    def _key(row: dict[str, Any]) -> tuple[int, Any]:
+        v = row.get(field)
+        if v is None:
+            return (1, None)
+        return (0, v)
+
+    return sorted(data, key=_key, reverse=desc)
+
+
+def apply_count_only(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse all rows to a single `{count: N}` row."""
+    return [{"count": len(data)}]
 
 
 # -- Internal ---------------------------------------------------------------

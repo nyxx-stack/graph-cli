@@ -1,6 +1,6 @@
 operations:
   - id: "audit.directory_logs"
-    aliases: ["audit.directory"]
+    aliases: ["audit.directory", "audit.role_management_logs", "audit.role_changes"]
     response_schema: "directoryAudit"
     rate_limit_class: "throttle_sensitive"
     summary: "Query Entra directory audit logs"
@@ -92,5 +92,28 @@ operations:
       - "authenticationRequirement"
       - "createdDateTime"
     default_orderby: "createdDateTime desc"
+    projections:
+      - name: "errorCode"
+        path: "status.errorCode"
+        enum_map:
+          "0": "success"
+          "50053": "account-locked"
+          "50055": "password-expired"
+          "50057": "account-disabled"
+          "50074": "strong-auth-required"
+          "50076": "mfa-required"
+          "50126": "invalid-credentials"
+          "50140": "keep-me-signed-in-interrupt"
+          "50144": "password-expired-ad"
+          "50158": "external-challenge-needed"
+          "50199": "mfa-interrupt"
+          "500121": "mfa-failed"
+          "53003": "blocked-by-CA"
+          "65001": "app-consent-required"
+          "700082": "refresh-token-expired"
+      - name: "failureReason"
+        path: "status.failureReason"
+    drop_paths:
+      - "status.additionalDetails"
     tags: ["sign-in", "login", "authentication", "failed", "mfa", "conditional access"]
     cmmc_controls: ["AU.L2-3.3.1", "AC.L2-3.1.8"]

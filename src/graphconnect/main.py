@@ -9,6 +9,9 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from graphconnect.output import (
+    apply_count_only,
+    apply_group_by,
+    apply_sort,
     console,
     emit_error,
     print_csv,
@@ -341,6 +344,10 @@ def read_operation(
     order_by: Annotated[str | None, typer.Option("--orderby", help="OData orderby expression")] = None,
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json|compact|csv — compact emits ndjson (one row per line)")] = None,
     envelope: Annotated[bool, typer.Option("--envelope", help="Wrap JSON output in {data, count, has_more, ...} instead of emitting rows directly.")] = False,
+    no_dedupe: Annotated[bool, typer.Option("--no-dedupe", help="Disable dedupe_by for this call (keep duplicate rows from Graph).")] = False,
+    group_by: Annotated[str | None, typer.Option("--group-by", help="Comma-separated fields; groups rows and emits one row per group. Combine with --count for counts.")] = None,
+    count: Annotated[bool, typer.Option("--count", help="With --group-by, emit a `count` column. On its own, emit a single row with the total.")] = False,
+    sort_by: Annotated[str | None, typer.Option("--sort", help="Client-side sort after projections: <field> or <field>:desc. Sorts only the rows already fetched — pair with `-n 0` to sort the full result set.")] = None,
 ) -> None:
     """Execute a read-only catalog operation against Microsoft Graph. Pass -n 0 to fetch every page."""
     import asyncio
@@ -384,6 +391,7 @@ def read_operation(
                 filter_expr=filter_expr,
                 expand=expand,
                 order_by=order_by,
+                dedupe=not no_dedupe,
             )
         )
     except CliError as exc:
@@ -391,8 +399,17 @@ def read_operation(
     except RuntimeError as exc:
         _fail(ErrorCode.UNKNOWN, str(exc), fmt=fmt, cause=exc)
 
+    data = result.data
+    if sort_by:
+        data = apply_sort(data, sort_by)
+    if group_by:
+        fields = [f.strip() for f in group_by.split(",") if f.strip()]
+        data = apply_group_by(data, fields, count=True)
+    elif count:
+        data = apply_count_only(data)
+
     print_result(
-        data=result.data,
+        data=data,
         output_format=fmt,
         title=f"{operation_id} ({result.item_count} items, {result.execution_time_ms}ms)",
         total=result.total_count,
@@ -508,11 +525,11 @@ def write_operation(
 
 @app.command("batch")
 def batch_read(
-    operation_ids: Annotated[list[str], typer.Argument(help="Operation IDs to batch")],
-    top: Annotated[int, typer.Option("--top", "-n", help="Max items per operation")] = 50,
+    operation_ids: Annotated[list[str], typer.Argument(help="Operation IDs; append `:key=val,key2=val2` for per-op parameters (e.g. 'devices.compliance_status:state=noncompliant')")],
+    top: Annotated[int, typer.Option("--top", "-n", help="Max items per operation")] = 100,
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json|csv")] = None,
 ) -> None:
-    """Execute multiple read operations in a single batch."""
+    """Execute multiple read operations in a single batch, concurrently."""
     import asyncio
 
     from graphconnect.catalog import get_entry
@@ -523,7 +540,12 @@ def batch_read(
         _fail(ErrorCode.USAGE_ERROR, "Maximum 10 operations per batch.", fmt=fmt)
 
     entries = []
-    for op_id in operation_ids:
+    params_by_index: list[dict[str, Any]] = []
+    for raw in operation_ids:
+        op_id, sep, param_str = raw.partition(":")
+        op_id = op_id.strip()
+        pieces = [p.strip() for p in param_str.split(",") if p.strip()] if sep else []
+        params = _parse_kv_params(pieces, fmt=fmt)
         entry = get_entry(op_id)
         if not entry:
             _fail(ErrorCode.NOT_FOUND, f"Operation not found: {op_id}", fmt=fmt)
@@ -534,9 +556,10 @@ def batch_read(
                 fmt=fmt,
             )
         entries.append(entry)
+        params_by_index.append(params)
 
     try:
-        results = asyncio.run(execute_batch(entries, top=top))
+        results = asyncio.run(execute_batch(entries, top=top, params_by_index=params_by_index))
     except CliError as exc:
         _fail_payload(exc.payload, fmt=fmt, cause=exc)
 

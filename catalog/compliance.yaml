@@ -19,7 +19,7 @@ operations:
         type: "string"
         required: true
         description: "Classic compliance policy ID"
-    tags: ["compliance", "settings", "summary", "device", "evaluation"]
+    tags: ["compliance", "settings", "summary", "device", "evaluation", "bitlocker", "encryption"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
   - id: "compliance.overall_summary"

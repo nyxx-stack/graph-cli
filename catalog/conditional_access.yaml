@@ -22,7 +22,7 @@ operations:
       - "conditions"
       - "grantControls"
       - "modifiedDateTime"
-    tags: ["conditional access", "ca", "mfa", "enforcement", "policy", "zero trust"]
+    tags: ["conditional access", "ca", "mfa", "enforcement", "policy", "zero trust", "authentication"]
     cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]
 
   - id: "conditional_access.policy_detail"
@@ -46,7 +46,7 @@ operations:
         type: "string"
         required: true
         description: "Conditional Access policy ID"
-    tags: ["conditional access", "ca", "detail", "policy"]
+    tags: ["conditional access", "ca", "detail", "policy", "authentication"]
     cmmc_controls: ["IA.L2-3.5.3", "AC.L2-3.1.1"]
 
   - id: "conditional_access.create_policy"

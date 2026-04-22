@@ -38,6 +38,7 @@ async def execute_read(
     filter_expr: str | None = None,
     expand: str | None = None,
     order_by: str | None = None,
+    dedupe: bool = True,
 ) -> OperationResult:
     """Execute a read-tier catalog operation against Microsoft Graph."""
     retry_after = check_rate_limit(SafetyTier.READ)
@@ -89,6 +90,8 @@ async def execute_read(
                 headers=headers,
             )
         data = _post_process_rows(data, entry.projections, entry.drop_paths, entry.id)
+        if dedupe and entry.dedupe_by:
+            data = _dedupe_rows(data, entry.dedupe_by)
     except Exception as exc:
         elapsed = int((time.monotonic() - start_time) * 1000)
         payload = _map_graph_exception(exc, correlation_id=correlation_id)
@@ -404,10 +407,20 @@ async def execute_write(
 
 async def execute_batch(
     entries: list[CatalogEntry],
-    top: int = 50,
+    top: int = 100,
+    params_by_index: list[dict[str, Any]] | None = None,
 ) -> list[OperationResult]:
-    """Execute read operations concurrently (Graph $batch endpoint can be added later)."""
-    return list(await asyncio.gather(*(execute_read(entry=entry, top=top) for entry in entries)))
+    """Execute read operations concurrently (Graph $batch endpoint can be added later).
+
+    `params_by_index[i]` supplies per-op parameters so callers can batch drill-ins
+    like `policies.settings_catalog_assignments` across multiple policy IDs without
+    a shell loop. Omit `params_by_index` to run each op with its catalog defaults.
+    """
+    calls = []
+    for i, entry in enumerate(entries):
+        params = params_by_index[i] if params_by_index else None
+        calls.append(execute_read(entry=entry, parameters=params, top=top))
+    return list(await asyncio.gather(*calls))
 
 
 # -- Internal helpers -------------------------------------------------------
@@ -729,7 +742,10 @@ async def _resolve_request_body(
 def _attach_query(url: str, query_params: dict[str, str] | None) -> str:
     if not query_params:
         return url
-    return f"{url}?{urlencode(query_params, safe='$,')}"
+    # Preserve `()`, `=`, and `;` in query values so nested OData like
+    # `$expand=members($select=id,displayName)` round-trips verbatim. `=` in values
+    # is unambiguous because urlencode formats each pair as key=value from a dict.
+    return f"{url}?{urlencode(query_params, safe='$,();=')}"
 
 
 def _compose_full_url(url: str, api_version: str, query_params: dict[str, str] | None = None) -> str:
@@ -1123,6 +1139,11 @@ def _expected_success_status(method: str) -> int:
 
 _MS_DATE_RE = re.compile(r"^/Date\((-?\d+)\)/$")
 
+# Graph uses year-0001 and year-9999 as "never" sentinels for never-reported /
+# no-expiry fields. Anything beyond these thresholds is emitted as None.
+_MS_DATE_SENTINEL_NEG = -60_000_000_000_000  # ~year 0070
+_MS_DATE_SENTINEL_POS = 253_000_000_000_000  # ~year 9990
+
 
 def _post_process_rows(
     rows: list[dict[str, Any]],
@@ -1143,6 +1164,12 @@ def _post_process_rows(
     if operation_id:
         _apply_operation_specific_postprocess(operation_id, rows)
     return rows
+
+
+# Field name fragments that commonly carry a user identity. When Graph/Intune
+# returns the literal string "None" on one of these, it means "no user" and
+# should be null. Scoped narrowly so we don't touch legitimate string values.
+_USER_IDENTITY_FIELD_FRAGMENTS = ("userprincipalname", "username", "useremail", "upn")
 
 
 def _drop_path(obj: dict[str, Any], path: str) -> None:
@@ -1204,9 +1231,16 @@ def _apply_operation_specific_postprocess(operation_id: str, rows: list[dict[str
 
 
 def _normalize_values(value: Any) -> Any:
-    """Recursively rewrite /Date(ms)/ strings to ISO 8601, mutating containers in place."""
+    """Single-pass normalization: /Date(ms)/ → ISO 8601, strip @odata.context, coerce 'None' → null on user-identity columns."""
     if isinstance(value, dict):
-        for k, v in value.items():
+        for k in [k for k in value if k == "@odata.context" or k.endswith("@odata.context")]:
+            value.pop(k, None)
+        for k, v in list(value.items()):
+            if isinstance(v, str) and v == "None":
+                kl = k.lower()
+                if any(frag in kl for frag in _USER_IDENTITY_FIELD_FRAGMENTS):
+                    value[k] = None
+                    continue
             value[k] = _normalize_values(v)
         return value
     if isinstance(value, list):
@@ -1218,13 +1252,43 @@ def _normalize_values(value: Any) -> Any:
         if match:
             try:
                 ms = int(match.group(1))
+            except ValueError:
+                return value
+            if ms <= _MS_DATE_SENTINEL_NEG or ms >= _MS_DATE_SENTINEL_POS:
+                return None
+            try:
                 return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-            except (ValueError, OverflowError, OSError):
-                # OSError (Errno 22) fires on Windows for out-of-range epoch values
-                # (e.g. pre-1970 `/Date(-1)/` sentinels or year-9999 placeholders).
-                # Fall back to the literal string so the row still serializes.
+            except (OverflowError, OSError):
                 return value
     return value
+
+
+def _dedupe_rows(rows: list[dict[str, Any]], fields: list[str]) -> list[dict[str, Any]]:
+    """Drop rows whose tuple of `fields` values matches a prior row. Keeps first occurrence.
+
+    Used for Graph endpoints that return the same logical row once per associated
+    user on multi-user devices (e.g. compliancePolicyStates, configurationStates).
+    """
+    parsed = [_split_field_path(f) for f in fields]
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        key_parts: list[Any] = []
+        for segments in parsed:
+            current: Any = row
+            for segment in segments:
+                if isinstance(current, dict):
+                    current = current.get(segment)
+                else:
+                    current = None
+                    break
+            key_parts.append(current)
+        key = tuple(key_parts)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 def _apply_projections(row: dict[str, Any], projections: list[CatalogProjection]) -> None:
@@ -1247,6 +1311,15 @@ _PS_REASON_TO_STATUS = {
 }
 
 
+_MANAGED_DEVICE_UNSELECTABLE = (
+    "joinType",
+    "chassisType",
+    "autopilotEnrolled",
+    "deviceType",
+    "deviceCategoryDisplayName",
+)
+
+
 def _specialized_hint(message: str, http_status: int | None) -> str | None:
     """Return a focused hint for known Graph quirks. None if nothing matches.
 
@@ -1254,6 +1327,23 @@ def _specialized_hint(message: str, http_status: int | None) -> str | None:
     ("known Graph issue — retry later") is worse than no hint because it
     sends the operator on a retry loop instead of examining the request.
     """
+    if http_status == 500 and "/deviceConfigurations/" in message and "$select=" in message:
+        return (
+            "Graph 500s on $select against polymorphic deviceConfiguration subtypes. "
+            "Drop default_select from the op or query without --select."
+        )
+    if (
+        http_status == 400
+        and "/managedDevices" in message
+        and "$select=" in message
+    ):
+        for field in _MANAGED_DEVICE_UNSELECTABLE:
+            if field in message:
+                return (
+                    f"Field `{field}` is not $select-able on /deviceManagement/managedDevices "
+                    "in v1.0 — Microsoft documents it but the OData schema rejects it. "
+                    "Drop it from your --select list."
+                )
     return None
 
 

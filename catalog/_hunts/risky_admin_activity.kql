@@ -1,0 +1,18 @@
+// title: Risky admin activity in the last 7 days
+// description: Directory role additions or privileged role assignments (PIM activations and permanent grants) in the last 7 days. Pair with sign-in anomalies when triaging.
+let window = 7d;
+let directoryEvents = AuditLogs
+    | where TimeGenerated > ago(window)
+    | where OperationName in (
+        "Add member to role",
+        "Add eligible member to role",
+        "Add member to role in PIM completed (permanent)",
+        "Add member to role completed (PIM activation)",
+        "Add member to role requested (PIM activation)"
+    )
+    | extend Actor = tostring(InitiatedBy.user.userPrincipalName)
+    | extend Target = tostring(TargetResources[0].userPrincipalName)
+    | extend RoleName = tostring(parse_json(tostring(TargetResources[0].modifiedProperties))[0].newValue);
+directoryEvents
+| project Timestamp = TimeGenerated, OperationName, Actor, Target, RoleName, Result, CorrelationId
+| order by Timestamp desc

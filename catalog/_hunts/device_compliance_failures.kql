@@ -1,0 +1,13 @@
+// title: Devices that became non-compliant in the last 24 hours
+// description: Devices whose compliance state flipped to non-compliant within the last day, with the failing policy and rule when available.
+let window = 1d;
+DeviceEvents
+| where Timestamp > ago(window)
+| where ActionType in ("DeviceComplianceStateChanged", "ComplianceStateChanged")
+| extend NewState = tostring(parse_json(AdditionalFields).NewComplianceState)
+| extend PreviousState = tostring(parse_json(AdditionalFields).PreviousComplianceState)
+| where NewState =~ "noncompliant" and PreviousState =~ "compliant"
+| project Timestamp, DeviceName, DeviceId, PreviousState, NewState,
+          PolicyName = tostring(parse_json(AdditionalFields).PolicyName),
+          FailingRule = tostring(parse_json(AdditionalFields).FailingRule)
+| order by Timestamp desc

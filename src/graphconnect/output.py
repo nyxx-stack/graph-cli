@@ -12,13 +12,14 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from graphconnect.types import ErrorCode, ErrorPayload
+from graphconnect.types import Envelope, ErrorCode, ErrorPayload
 
 # Rich Console honors NO_COLOR automatically; force_terminal=False keeps it off when piped.
 console = Console()
 stderr_console = Console(stderr=True)
 
 _QUIET = False
+_BARE = False
 
 
 def set_quiet(value: bool) -> None:
@@ -29,6 +30,28 @@ def set_quiet(value: bool) -> None:
 
 def is_quiet() -> bool:
     return _QUIET
+
+
+def set_bare(value: bool) -> None:
+    """Enable/disable legacy bare output mode for `emit` callers that don't pass bare=."""
+    global _BARE
+    _BARE = value
+
+
+def is_bare() -> bool:
+    return _BARE
+
+
+class EnvelopeEmitError(Exception):
+    """Raised by emit() when bare=True sees a non-ok envelope so the CLI can exit non-zero.
+
+    The exit code comes from the envelope's error payload via exit_for_code.
+    """
+
+    def __init__(self, envelope: "Envelope", exit_code: int) -> None:
+        self.envelope = envelope
+        self.exit_code = exit_code
+        super().__init__(envelope.summary)
 
 
 def is_tty() -> bool:
@@ -282,3 +305,101 @@ def _format_value(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     return str(value)
+
+
+# -- v2 envelope emit -------------------------------------------------------
+
+
+def emit(env: Envelope, *, bare: bool | None = None, format: str = "json") -> None:
+    """Render a v2 envelope to stdout.
+
+    - Default JSON mode emits the full envelope.
+    - `bare=True` emits the legacy shape: `env.data` for reads, `env.plan` for
+      plans, and raises `EnvelopeEmitError` for error envelopes so the caller
+      can set a non-zero exit code.
+    - `format="table"` renders `env.data` via Rich; warnings/next_actions
+      chatter goes to stderr.
+    - `format="csv"` / `format="compact"` (ndjson) emit `env.data`.
+
+    `bare` defaults to the global flag set via `set_bare` (driven by `--bare`).
+    """
+    if bare is None:
+        bare = _BARE
+
+    if not env.ok:
+        return _emit_error_envelope(env, bare=bare, format=format)
+
+    if bare:
+        _emit_bare(env, format=format)
+    else:
+        _emit_envelope(env, format=format)
+
+    _emit_status_chatter(env)
+
+
+def _emit_envelope(env: Envelope, *, format: str) -> None:
+    if format == "table":
+        if env.data is not None:
+            print_table(env.data, title=env.summary or None)
+            return
+        if env.plan is not None:
+            print_json(env.plan)
+            return
+        print_json(env.model_dump(exclude_none=True))
+        return
+    if format == "csv":
+        print_csv(env.data or [])
+        return
+    if format == "compact":
+        print_ndjson(env.data or [])
+        return
+    print_json(env.model_dump(exclude_none=True))
+
+
+def _emit_bare(env: Envelope, *, format: str) -> None:
+    if env.mode == "plan":
+        payload: Any = env.plan or {}
+    else:
+        payload = env.data if env.data is not None else []
+
+    if format == "table":
+        if isinstance(payload, list):
+            print_table(payload, title=env.summary or None)
+        else:
+            print_json(payload)
+        return
+    if format == "csv":
+        print_csv(payload if isinstance(payload, list) else [payload])
+        return
+    if format == "compact":
+        if isinstance(payload, list):
+            print_ndjson(payload)
+        else:
+            print(json.dumps(payload, default=str, separators=(",", ":")))
+        return
+    print_json(payload)
+
+
+def _emit_error_envelope(env: Envelope, *, bare: bool, format: str) -> None:
+    payload = env.error or ErrorPayload(code=ErrorCode.UNKNOWN, message=env.summary)
+    if bare:
+        # Legacy callers expect stderr for errors + a non-zero exit code.
+        exit_code = emit_error(payload, output_format=format if format in ("json", "table") else None)
+        raise EnvelopeEmitError(env, exit_code)
+    # Envelope mode: full envelope on stdout so machine callers can parse it.
+    if format == "table":
+        stderr_console.print(f"[red]Error:[/red] {env.summary}")
+        if payload.hint:
+            stderr_console.print(f"  [dim]hint:[/dim] {payload.hint}")
+    else:
+        print_json(env.model_dump(exclude_none=True))
+    _emit_status_chatter(env)
+
+
+def _emit_status_chatter(env: Envelope) -> None:
+    if _QUIET:
+        return
+    for warning in env.warnings:
+        stderr_console.print(f"[yellow]warning:[/yellow] {warning}")
+    for action in env.next_actions:
+        stderr_console.print(f"[dim]next:[/dim] {action}")

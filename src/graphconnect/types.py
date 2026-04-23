@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -136,6 +136,11 @@ class CatalogEntry(BaseModel):
     # logical row once per user on multi-user devices. Callers can override with
     # --no-dedupe on `read`.
     dedupe_by: list[str] = Field(default_factory=list)
+    # v2 extensions (optional; defaults keep existing catalog YAML valid).
+    national_cloud_overrides: dict[str, str] | None = None
+    auth_profile_required: Literal["delegated", "app-only", "any"] = "any"
+    emergency_safe: bool = False
+    workflow_pack: str | None = None
 
     @property
     def search_text(self) -> str:
@@ -236,3 +241,101 @@ class AuthStatus(BaseModel):
     display_name: str | None = None
     token_expires: datetime | None = None
     scopes: list[str] = Field(default_factory=list)
+
+
+class Envelope(BaseModel):
+    """Uniform v2 response shape emitted by every verb."""
+
+    ok: bool
+    trace_id: str
+    mode: Literal["read", "plan", "apply", "breakglass"]
+    summary: str
+    data: list[dict[str, Any]] | None = None
+    plan: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    error: ErrorPayload | None = None
+
+    @classmethod
+    def ok_read(
+        cls,
+        summary: str,
+        data: list[dict[str, Any]],
+        *,
+        trace_id: str,
+        warnings: list[str] | None = None,
+        next_actions: list[str] | None = None,
+    ) -> "Envelope":
+        return cls(
+            ok=True,
+            trace_id=trace_id,
+            mode="read",
+            summary=summary,
+            data=data,
+            warnings=warnings or [],
+            next_actions=next_actions or [],
+        )
+
+    @classmethod
+    def ok_plan(
+        cls,
+        summary: str,
+        plan: dict[str, Any],
+        *,
+        trace_id: str,
+        warnings: list[str] | None = None,
+        next_actions: list[str] | None = None,
+    ) -> "Envelope":
+        return cls(
+            ok=True,
+            trace_id=trace_id,
+            mode="plan",
+            summary=summary,
+            plan=plan,
+            warnings=warnings or [],
+            next_actions=next_actions or [],
+        )
+
+    @classmethod
+    def ok_apply(
+        cls,
+        summary: str,
+        *,
+        trace_id: str,
+        data: list[dict[str, Any]] | None = None,
+        plan: dict[str, Any] | None = None,
+        warnings: list[str] | None = None,
+        next_actions: list[str] | None = None,
+        breakglass: bool = False,
+    ) -> "Envelope":
+        return cls(
+            ok=True,
+            trace_id=trace_id,
+            mode="breakglass" if breakglass else "apply",
+            summary=summary,
+            data=data,
+            plan=plan,
+            warnings=warnings or [],
+            next_actions=next_actions or [],
+        )
+
+    @classmethod
+    def err(
+        cls,
+        summary: str,
+        error: ErrorPayload,
+        *,
+        trace_id: str,
+        mode: Literal["read", "plan", "apply", "breakglass"] = "read",
+        warnings: list[str] | None = None,
+        next_actions: list[str] | None = None,
+    ) -> "Envelope":
+        return cls(
+            ok=False,
+            trace_id=trace_id,
+            mode=mode,
+            summary=summary,
+            warnings=warnings or [],
+            next_actions=next_actions or [],
+            error=error,
+        )

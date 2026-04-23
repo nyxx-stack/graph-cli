@@ -122,6 +122,7 @@ operations:
       the operational sense because it blocks sign-in.
     domain: "users"
     safety_tier: "destructive"
+    emergency_safe: true
     method: "PATCH"
     endpoint: "/users/{user_id}"
     body_template:
@@ -152,6 +153,7 @@ operations:
       forceChangePasswordNextSignIn to true unless the body overrides it.
     domain: "users"
     safety_tier: "destructive"
+    emergency_safe: true
     method: "PATCH"
     endpoint: "/users/{user_id}"
     preview_lookup_endpoint: "/users/{user_id}"

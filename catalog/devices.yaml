@@ -378,6 +378,7 @@ operations:
       non-default wipe options such as keeping user or enrollment data.
     domain: "devices"
     safety_tier: "destructive"
+    emergency_safe: true
     method: "POST"
     endpoint: "/deviceManagement/managedDevices/{device_id}/wipe"
     preview_lookup_endpoint: "/deviceManagement/managedDevices/{device_id}"

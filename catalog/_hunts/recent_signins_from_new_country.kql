@@ -1,0 +1,16 @@
+// title: Recent sign-ins from a new country
+// description: Sign-ins from a country the account has not signed in from in the prior 30 days. Useful for spotting suspicious travel or session hijack patterns.
+let lookback = 1d;
+let baseline = 30d;
+let recent = SigninLogs
+    | where TimeGenerated > ago(lookback)
+    | where ResultType == 0
+    | project UserPrincipalName, TimeGenerated, RecentCountry = tostring(LocationDetails.countryOrRegion), RecentCity = tostring(LocationDetails.city), IPAddress;
+let baselineCountries = SigninLogs
+    | where TimeGenerated between (ago(baseline) .. ago(lookback))
+    | where ResultType == 0
+    | summarize by UserPrincipalName, BaselineCountry = tostring(LocationDetails.countryOrRegion);
+recent
+| join kind=leftanti baselineCountries on UserPrincipalName, $left.RecentCountry == $right.BaselineCountry
+| project Timestamp = TimeGenerated, UserPrincipalName, RecentCountry, RecentCity, IPAddress
+| order by Timestamp desc

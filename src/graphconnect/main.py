@@ -19,6 +19,7 @@ from graphconnect.output import (
     print_result,
     print_table,
     resolve_format,
+    set_bare,
     set_quiet,
     stderr_console,
 )
@@ -51,10 +52,13 @@ def _fail_payload(
 
 def _global_callback(
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress chatter on stderr.")] = False,
+    bare: Annotated[bool, typer.Option("--bare", help="Emit legacy bare output shape (arrays for reads, plan objects for plans).")] = False,
 ) -> None:
-    """Top-level callback; applies --quiet for every subcommand."""
+    """Top-level callback; applies --quiet/--bare for every subcommand."""
     if quiet:
         set_quiet(True)
+    if bare:
+        set_bare(True)
 
 
 app = typer.Typer(
@@ -67,23 +71,85 @@ app = typer.Typer(
     callback=_global_callback,
 )
 
+from graphconnect.commands import (
+    find as cmd_find,
+    show as cmd_show,
+    explain as cmd_explain,
+    change as cmd_change,
+    hunt as cmd_hunt,
+    raw as cmd_raw,
+    trace as cmd_trace,
+)
+
+cmd_find.register(app)
+cmd_show.register(app)
+cmd_explain.register(app)
+cmd_change.register(app)
+cmd_hunt.register(app)
+cmd_raw.register(app)
+cmd_trace.register(app)
+
 auth_app = typer.Typer(help="Manage Microsoft Graph authentication.")
 app.add_typer(auth_app, name="auth")
 
 
 # -- auth commands ---------------------------------------------------------
 
+# TODO(merge): auth-builder added these verbs — profile-aware options on
+# login/status plus new `auth use` / `auth list` per v2 contract §3.
+
 
 @auth_app.command("login")
 def auth_login(
+    profile: Annotated[str | None, typer.Option("--profile", help="Profile name to create/use")] = None,
+    mode: Annotated[
+        str | None,
+        typer.Option("--mode", help="delegated|app-secret|app-cert (new profile only)"),
+    ] = None,
+    tenant: Annotated[str | None, typer.Option("--tenant", help="Entra tenant ID")] = None,
+    client: Annotated[str | None, typer.Option("--client", help="App client ID")] = None,
+    secret: Annotated[str | None, typer.Option("--secret", help="App client secret (app-secret)")] = None,
+    cert: Annotated[str | None, typer.Option("--cert", help="Certificate path (.pem/.pfx)")] = None,
+    national_cloud: Annotated[
+        str, typer.Option("--national-cloud", help="commercial|USGov|USGovHigh|DoD|China")
+    ] = "commercial",
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
 ) -> None:
-    """Start device code flow to authenticate with Microsoft Graph."""
-    from graphconnect.auth import login
+    """Start device code flow or register a named profile."""
+    from graphconnect.auth import legacy_login_default
+    from graphconnect.auth import login as profile_login
 
     fmt = resolve_format(output_format)
+
+    if profile is not None and mode is not None:
+        import asyncio
+        import os
+
+        if mode not in ("delegated", "app-secret", "app-cert"):
+            _fail(ErrorCode.USAGE_ERROR, f"unknown --mode '{mode}'", fmt=fmt)
+        if secret:
+            os.environ["MSGRAPH_CLIENT_SECRET"] = secret
+        try:
+            created = asyncio.run(
+                profile_login(
+                    profile,
+                    mode=mode,  # type: ignore[arg-type]
+                    tenant_id=tenant,
+                    client_id=client,
+                    cert_path=cert,
+                    national_cloud=national_cloud,
+                )
+            )
+        except Exception as exc:
+            _fail(ErrorCode.AUTH_REQUIRED, str(exc), fmt=fmt, cause=exc)
+        if fmt == "json":
+            print_json(created.model_dump())
+            return
+        stderr_console.print(f"[green]Profile '{created.name}' saved.[/green]")
+        return
+
     try:
-        result = login()
+        result = legacy_login_default()
     except RuntimeError as exc:
         hint = "Install Microsoft.Graph.Authentication or configure MSGRAPH_TENANT_ID / MSGRAPH_CLIENT_ID."
         message = str(exc)
@@ -117,16 +183,35 @@ def auth_login(
 
 @auth_app.command("status")
 def auth_status(
+    profile: Annotated[str | None, typer.Option("--profile", help="Show a specific profile")] = None,
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
 ) -> None:
-    """Show current authentication status."""
-    from graphconnect.auth import status
+    """Show current authentication status (optionally scoped to a profile)."""
+    from graphconnect.auth import legacy_status_default
+    from graphconnect.auth import status as profile_status
 
     fmt = resolve_format(output_format)
-    result = status()
-    if fmt == "json":
-        print_json(result.model_dump())
+
+    if profile is not None or fmt == "json":
+        import asyncio
+
+        entries = asyncio.run(profile_status(profile))
+        if fmt == "json":
+            print_json([e.model_dump() for e in entries])
+            return
+        for entry in entries:
+            tag = "[green]ok[/green]" if entry.authenticated else "[yellow]unauthenticated[/yellow]"
+            default_tag = " (default)" if entry.default else ""
+            console.print(f"[bold]{entry.name}{default_tag}[/bold] — mode={entry.mode} {tag}")
+            if entry.user_principal:
+                console.print(f"  user: {entry.user_principal}")
+            if entry.token_expires:
+                console.print(f"  token expires: {entry.token_expires.isoformat()}")
+            if entry.error:
+                console.print(f"  [red]error:[/red] {entry.error}")
         return
+
+    result = legacy_status_default()
     if result.authenticated:
         console.print("[green]Authenticated[/green]")
         if result.auth_method:
@@ -144,17 +229,56 @@ def auth_status(
 
 @auth_app.command("logout")
 def auth_logout(
+    profile: Annotated[str | None, typer.Option("--profile", help="Clear a specific profile")] = None,
     output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
 ) -> None:
     """Clear cached authentication credentials."""
     from graphconnect.auth import logout
 
     fmt = resolve_format(output_format)
-    logout()
+    logout(profile=profile)
     if fmt == "json":
-        print_json({"status": "logged_out"})
+        print_json({"status": "logged_out", "profile": profile})
         return
     console.print("[green]Logged out.[/green]")
+
+
+@auth_app.command("use")
+def auth_use(
+    name: Annotated[str, typer.Argument(help="Profile name to set as default")],
+    output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
+) -> None:
+    """Set the default profile."""
+    from graphconnect.auth import use_profile
+
+    fmt = resolve_format(output_format)
+    try:
+        use_profile(name)
+    except FileNotFoundError as exc:
+        _fail(ErrorCode.NOT_FOUND, str(exc), fmt=fmt, cause=exc)
+    if fmt == "json":
+        print_json({"status": "ok", "default": name})
+        return
+    console.print(f"[green]Default profile set to '{name}'.[/green]")
+
+
+@auth_app.command("list")
+def auth_list(
+    output_format: Annotated[str | None, typer.Option("--format", "-f", help="table|json")] = None,
+) -> None:
+    """List all auth profiles."""
+    from graphconnect.auth import list_profiles
+
+    fmt = resolve_format(output_format)
+    profiles = list_profiles()
+    rows = [p.model_dump() for p in profiles]
+    if fmt == "json":
+        print_json(rows)
+        return
+    if not rows:
+        console.print("[yellow]No profiles configured.[/yellow]")
+        return
+    print_table(rows, title="Auth profiles")
 
 
 @auth_app.command("config")
@@ -175,7 +299,7 @@ def auth_config(
 # -- catalog commands ------------------------------------------------------
 
 catalog_app = typer.Typer(help="Search and browse the operation catalog.")
-app.add_typer(catalog_app, name="catalog")
+app.add_typer(catalog_app, name="catalog", hidden=True)
 
 
 @catalog_app.command("search")
@@ -345,7 +469,7 @@ def catalog_detail(
 # -- read / write / batch / schema / doctor --------------------------------
 
 
-@app.command("read")
+@app.command("read", hidden=True)
 def read_operation(
     operation_id: Annotated[str, typer.Argument(help="Catalog operation ID")],
     param: Annotated[list[str] | None, typer.Option("--param", "-p", help="key=value (values split on FIRST '='); use --params-json for values containing '='")] = None,
@@ -437,7 +561,7 @@ def read_operation(
     )
 
 
-@app.command("write")
+@app.command("write", hidden=True)
 def write_operation(
     operation_id: Annotated[str, typer.Argument(help="Catalog operation ID")],
     param: Annotated[list[str] | None, typer.Option("--param", "-p", help="key=value (splits on first '=')")] = None,
@@ -536,7 +660,7 @@ def write_operation(
     )
 
 
-@app.command("batch")
+@app.command("batch", hidden=True)
 def batch_read(
     operation_ids: Annotated[list[str], typer.Argument(help="Operation IDs; append `:key=val,key2=val2` for per-op parameters (e.g. 'devices.compliance_status:state=noncompliant')")],
     top: Annotated[int, typer.Option("--top", "-n", help="Max items per operation")] = 100,
@@ -591,7 +715,7 @@ def batch_read(
         print_result(data=result.data, output_format="table", title=None, has_more=result.has_more)
 
 
-@app.command("schema")
+@app.command("schema", hidden=True)
 def schema_inspect(
     resource_type: Annotated[str, typer.Argument(help="Graph resource type (e.g., managedDevice)")],
     relationships: Annotated[bool, typer.Option("--relationships", "-r", help="Show relationships")] = False,

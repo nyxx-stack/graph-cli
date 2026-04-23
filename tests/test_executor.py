@@ -358,6 +358,247 @@ def test_execute_read_applies_projections_and_date_normalization(monkeypatch):
     assert row["lastSyncDateTime"].startswith("2021-")
 
 
+def test_normalize_export_rows_handles_columns_and_dict_values():
+    document = {
+        "columns": ["DeviceId", "SettingName", "SettingStatus"],
+        "values": [
+            {"DeviceId": "dev-1", "SettingName": "PrivilegeUse_AuditSensitivePrivilegeUse", "SettingStatus": 6}
+        ],
+    }
+
+    assert executor._normalize_export_rows(document) == document["values"]
+
+
+def test_execute_read_downloads_export_job(monkeypatch):
+    async def fake_execute_mutation(method, url, api_version, body, headers=None, expected_status=204):
+        assert method == "POST"
+        assert body["reportName"] == "DevicePolicySettingsComplianceReport"
+        return {"id": "job-1", "status": "completed", "url": "https://example.invalid/export.zip"}, 12, 201
+
+    async def fake_download_export_rows(download_url):
+        assert download_url == "https://example.invalid/export.zip"
+        return (
+            [
+                {"SettingName": "PrivilegeUse_AuditSensitivePrivilegeUse", "SettingStatus": 6},
+                {"SettingName": "DetailedTracking_AuditPNPActivity", "SettingStatus": 2},
+            ],
+            20,
+        )
+
+    monkeypatch.setattr(executor, "_execute_mutation", fake_execute_mutation)
+    monkeypatch.setattr(executor, "_download_export_rows", fake_download_export_rows)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        method="POST",
+        endpoint="/deviceManagement/reports/exportJobs",
+        download_export=True,
+        parameters=[
+            CatalogParameter(name="device_id", type="string", required=True),
+            CatalogParameter(name="policy_id", type="string", required=True),
+        ],
+        body_template={
+            "reportName": "DevicePolicySettingsComplianceReport",
+            "format": "json",
+            "filter": "(DeviceId eq '{device_id}') and (PolicyId eq '{policy_id}')",
+        },
+        projections=[
+            CatalogProjection(
+                name="Status",
+                path="SettingStatus",
+                enum_map={"2": "Compliant", "6": "Conflict"},
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        execute_read(
+            entry,
+            parameters={"device_id": "dev-1", "policy_id": "policy-1"},
+            top=1,
+        )
+    )
+
+    assert result.item_count == 1
+    assert result.total_count == 2
+    assert result.has_more is True
+    assert result.data[0]["SettingName"] == "PrivilegeUse_AuditSensitivePrivilegeUse"
+    assert result.data[0]["Status"] == "Conflict"
+
+
+def test_execute_export_job_read_uses_cache(monkeypatch):
+    monkeypatch.setattr(
+        executor,
+        "_load_cached_export_rows",
+        lambda **kwargs: ([{"SettingName": "CachedSetting"}], 33),
+    )
+
+    async def fail_execute_mutation(*args, **kwargs):
+        raise AssertionError("cache hit should skip export job creation")
+
+    monkeypatch.setattr(executor, "_execute_mutation", fail_execute_mutation)
+
+    rows, total_count, has_more, bytes_read, http_status = asyncio.run(
+        executor._execute_export_job_read(
+            url="/deviceManagement/reports/exportJobs",
+            api_version="beta",
+            request_body={"reportName": "DevicePolicySettingsComplianceReport"},
+            headers=None,
+            top=10,
+            correlation_id="corr-1",
+        )
+    )
+
+    assert rows == [{"SettingName": "CachedSetting"}]
+    assert total_count == 1
+    assert has_more is False
+    assert bytes_read == 33
+    assert http_status == 200
+
+
+def test_execute_read_policy_setting_statuses_resolves_names_filters_failures_and_adds_overlap(
+    monkeypatch,
+):
+    async def fake_resolve_context(parameters, correlation_id, *, policy_lookup=None):
+        return {
+            "device_id": "dev-1",
+            "device_name": "DANAEH-PC",
+            "device_user_principal_name": None,
+            "policy_id": "policy-1",
+            "policy_name": "Audit and Event Logging",
+            "policy_kind": "settings_catalog",
+        }
+
+    async def fake_fetch_policy_setting_rows(device_id, *, policy_id=None, correlation_id):
+        all_rows = [
+            {
+                "DeviceId": "dev-1",
+                "PolicyId": "policy-1",
+                "SettingName": "PrivilegeUse_AuditSensitivePrivilegeUse",
+                "SettingStatus": 6,
+                "SettingStatus_loc": "Conflict",
+                "ErrorCode": -2016281211,
+            },
+            {
+                "DeviceId": "dev-1",
+                "PolicyId": "policy-1",
+                "SettingName": "DetailedTracking_AuditPNPActivity",
+                "SettingStatus": 2,
+                "SettingStatus_loc": "Compliant",
+                "ErrorCode": None,
+            },
+            {
+                "DeviceId": "dev-1",
+                "PolicyId": "policy-2",
+                "SettingName": "PrivilegeUse_AuditSensitivePrivilegeUse",
+                "SettingStatus": 2,
+                "SettingStatus_loc": "Compliant",
+            },
+        ]
+        if policy_id is None:
+            return all_rows, 44
+        return [row for row in all_rows if row["PolicyId"] == policy_id], 44
+
+    async def fake_list_policy_lookup(correlation_id):
+        return {
+            "policy-1": {"id": "policy-1", "name": "Audit and Event Logging", "kind": "settings_catalog"},
+            "policy-2": {"id": "policy-2", "name": "Legacy Baseline", "kind": "config_profile"},
+        }
+
+    monkeypatch.setattr(executor, "_resolve_policy_setting_context", fake_resolve_context)
+    monkeypatch.setattr(executor, "_fetch_policy_setting_rows", fake_fetch_policy_setting_rows)
+    monkeypatch.setattr(executor, "_list_policy_lookup", fake_list_policy_lookup)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        id="devices.policy_setting_statuses",
+        method="POST",
+        endpoint="/deviceManagement/reports/exportJobs",
+        download_export=True,
+        parameters=[
+            CatalogParameter(name="device_name", type="string"),
+            CatalogParameter(name="policy_name", type="string"),
+            CatalogParameter(name="failures_only", type="boolean", default=False),
+            CatalogParameter(name="include_overlap_context", type="boolean", default=False),
+        ],
+        projections=[
+            CatalogProjection(name="Status", path="SettingStatus", enum_map={"2": "Compliant", "6": "Conflict"})
+        ],
+        dedupe_by=["DeviceId", "PolicyId", "SettingName", "SettingStatus"],
+    )
+
+    result = asyncio.run(
+        execute_read(
+            entry,
+            parameters={
+                "device_name": "DANAEH-PC",
+                "policy_name": "Audit and Event Logging",
+                "failures_only": "true",
+                "include_overlap_context": "true",
+            },
+            top=10,
+        )
+    )
+
+    assert result.item_count == 1
+    row = result.data[0]
+    assert row["Status"] == "Conflict"
+    assert row["SettingLabel"] == "Privilege Use - Audit Sensitive Privilege Use"
+    assert row["OtherPolicies"] == ["Legacy Baseline"]
+    assert "Conflict" in row["ErrorHint"]
+
+
+def test_execute_read_explain_policy_failure_postprocesses_operator_fields(monkeypatch):
+    async def fake_explain(parameters, top, correlation_id):
+        return (
+            [
+                {
+                    "DeviceName": "DANAEH-PC",
+                    "PolicyName": "Audit and Event Logging",
+                    "SettingName": "PrivilegeUse_AuditSensitivePrivilegeUse",
+                    "SettingStatus": 6,
+                    "SettingStatus_loc": "Conflict",
+                    "ErrorCode": -2016281211,
+                    "OtherPolicies": ["Legacy Baseline"],
+                    "ConflictHint": "Also set by: Legacy Baseline",
+                }
+            ],
+            1,
+            False,
+            21,
+            200,
+        )
+
+    monkeypatch.setattr(executor, "_execute_explain_policy_failure", fake_explain)
+    monkeypatch.setattr(executor, "check_rate_limit", lambda tier: None)
+    monkeypatch.setattr(executor, "log_operation", lambda **kwargs: None)
+
+    entry = _entry(
+        id="devices.explain_policy_failure",
+        method="GET",
+        endpoint="/internal/devices/explainPolicyFailure",
+        parameters=[
+            CatalogParameter(name="device_name", type="string"),
+            CatalogParameter(name="policy_name", type="string"),
+        ],
+    )
+
+    result = asyncio.run(
+        execute_read(
+            entry,
+            parameters={"device_name": "DANAEH-PC", "policy_name": "Audit and Event Logging"},
+            top=10,
+        )
+    )
+
+    row = result.data[0]
+    assert row["SettingLabel"] == "Privilege Use - Audit Sensitive Privilege Use"
+    assert row["ErrorHint"] == "Conflict: another assigned policy is setting this value."
+    assert row["ConflictHint"] == "Also set by: Legacy Baseline"
+
+
 def test_multi_filter_expands_comma_list_to_odata_in(monkeypatch):
     captured: dict[str, object] = {}
 

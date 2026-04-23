@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import functools
 import hashlib
+import io
 import json
 import re
 import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from graphconnect.audit import log_operation
-from graphconnect.auth import peek_user_principal
+from graphconnect.auth import CONFIG_DIR, peek_user_principal
 from graphconnect.safety import check_rate_limit, generate_token, validate_token
 from graphconnect.types import (
     AuthMethod,
@@ -28,6 +32,42 @@ from graphconnect.types import (
     SafetyTier,
     WritePreview,
 )
+
+
+_EXPORT_CACHE_DIR = CONFIG_DIR / "cache" / "exports"
+_EXPORT_CACHE_TTL_SECONDS = 600
+_EXPORT_JOB_DEADLINE_SECONDS = 120
+_EXPORT_JOB_POLL_INTERVAL_SECONDS = 3
+_POLICY_SETTING_STATUS_BY_CODE: dict[int, str] = {
+    0: "Unknown",
+    1: "NotApplicable",
+    2: "Compliant",
+    3: "Remediated",
+    4: "NonCompliant",
+    5: "Error",
+    6: "Conflict",
+}
+_POLICY_SETTING_FAILURE_STATUSES = {"Conflict", "Error", "NonCompliant"}
+_POLICY_SETTING_REPORT_SELECT = [
+    "DeviceId",
+    "PolicyId",
+    "SettingId",
+    "SettingInstanceId",
+    "SettingName",
+    "SettingNm",
+    "SettingStatus",
+    "StateDetails",
+    "ErrorCode",
+    "ErrorType",
+    "SettingValue",
+    "UserId",
+]
+_POLICY_SETTING_DEDUPE_FIELDS = ["DeviceId", "PolicyId", "SettingInstanceId", "SettingStatus"]
+_INTUNE_ERROR_HINTS = {
+    -2016281211: "Conflict: another assigned policy is setting this value.",
+    -2016281112: "Remediation failed on the device.",
+    65000: "Device returned an unspecified Intune error.",
+}
 
 
 async def execute_read(
@@ -69,17 +109,50 @@ async def execute_read(
     user_principal = peek_user_principal()
 
     try:
-        if method == "POST":
-            request_body = _build_body(entry, parameters, None) or {}
-            raw, bytes_read, http_status = await _execute_mutation(
-                method="POST",
-                url=url,
-                api_version=entry.api_version.value,
-                body=request_body,
-                headers=headers,
-                expected_status=200,
+        if entry.id == "devices.policy_setting_statuses":
+            data, total_count, has_more, bytes_read, http_status, parameters = await _execute_policy_setting_statuses(
+                parameters=parameters,
+                top=top,
+                correlation_id=correlation_id,
             )
-            data, total_count, has_more = _normalize_post_read_response(raw, top)
+        elif entry.id == "devices.explain_policy_failure":
+            data, total_count, has_more, bytes_read, http_status = await _execute_explain_policy_failure(
+                parameters=parameters,
+                top=top,
+                correlation_id=correlation_id,
+            )
+            audit_url = "/internal/devices/explainPolicyFailure"
+        elif method == "POST":
+            request_body = _build_body(entry, parameters, None) or {}
+            if isinstance(request_body, dict) and select:
+                request_body = {**request_body, "select": select}
+            if isinstance(request_body, dict) and order_by and "orderBy" in request_body:
+                request_body = {
+                    **request_body,
+                    "orderBy": [part.strip() for part in order_by.split(",") if part.strip()],
+                }
+            # Reports endpoints take top/skip in the JSON body, not on the URL.
+            if isinstance(request_body, dict) and "top" in request_body:
+                request_body = {**request_body, "top": 500 if top <= 0 else top}
+            if entry.download_export:
+                data, total_count, has_more, bytes_read, http_status = await _execute_export_job_read(
+                    url=url,
+                    api_version=entry.api_version.value,
+                    request_body=request_body,
+                    headers=headers,
+                    top=top,
+                    correlation_id=correlation_id,
+                )
+            else:
+                raw, bytes_read, http_status = await _execute_mutation(
+                    method="POST",
+                    url=url,
+                    api_version=entry.api_version.value,
+                    body=request_body,
+                    headers=headers,
+                    expected_status=200,
+                )
+                data, total_count, has_more = _normalize_post_read_response(raw, top)
         else:
             data, total_count, has_more, bytes_read, http_status = await _execute_get(
                 url,
@@ -92,6 +165,9 @@ async def execute_read(
         data = _post_process_rows(data, entry.projections, entry.drop_paths, entry.id)
         if dedupe and entry.dedupe_by:
             data = _dedupe_rows(data, entry.dedupe_by)
+        if entry.id == "devices.policy_setting_statuses" and parameters.get("failures_only"):
+            data = _filter_policy_failure_rows(data)
+            total_count = len(data)
     except Exception as exc:
         elapsed = int((time.monotonic() - start_time) * 1000)
         payload = _map_graph_exception(exc, correlation_id=correlation_id)
@@ -141,6 +217,506 @@ async def execute_read(
         request_id=request_id,
         correlation_id=correlation_id,
     )
+
+
+def _normalize_match_text(value: Any) -> str:
+    """Case-insensitive compare key for operator-supplied names."""
+    return str(value or "").strip().lower()
+
+
+def _odata_literal(value: str) -> str:
+    """Escape a value for inclusion in an OData single-quoted literal."""
+    return value.replace("'", "''")
+
+
+def _format_resolution_candidate(resource: dict[str, Any], name_key: str) -> str:
+    """Render a concise candidate label for ambiguous name resolution errors."""
+    name = resource.get(name_key) or resource.get("name") or resource.get("displayName") or resource.get("deviceName")
+    resource_id = resource.get("id")
+    if resource_id and resource_id != name:
+        return f"{name} ({resource_id})"
+    return str(name or resource_id or "resource")
+
+
+def _pick_named_resource(
+    resources: list[dict[str, Any]],
+    desired_name: str,
+    *,
+    label: str,
+    name_key: str,
+) -> dict[str, Any]:
+    """Resolve an exact or unique substring name match from a list of resources."""
+    desired = _normalize_match_text(desired_name)
+    exact = [row for row in resources if _normalize_match_text(row.get(name_key)) == desired]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        choices = ", ".join(_format_resolution_candidate(row, name_key) for row in exact[:5])
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.CONFLICT,
+                message=f"Multiple {label}s matched '{desired_name}'.",
+                hint=f"Be more specific or pass the id directly. Matches: {choices}",
+            )
+        )
+
+    contains = [row for row in resources if desired and desired in _normalize_match_text(row.get(name_key))]
+    if len(contains) == 1:
+        return contains[0]
+    if len(contains) > 1:
+        choices = ", ".join(_format_resolution_candidate(row, name_key) for row in contains[:5])
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.CONFLICT,
+                message=f"Multiple {label}s contain '{desired_name}'.",
+                hint=f"Use the exact name or id. Matches: {choices}",
+            )
+        )
+
+    raise CliError(
+        ErrorPayload(
+            code=ErrorCode.NOT_FOUND,
+            message=f"{label.capitalize()} not found: {desired_name}",
+            hint=f"Run the matching list op to confirm the exact {label} name or id.",
+        )
+    )
+
+
+async def _list_managed_devices_for_resolution(
+    correlation_id: str,
+    *,
+    filter_expr: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load managed devices for name resolution, optionally pre-filtered server-side."""
+    query: dict[str, str] = {"$select": "id,deviceName,userPrincipalName"}
+    if filter_expr:
+        query["$filter"] = filter_expr
+    rows, _, _, _, _ = await _execute_get(
+        "/deviceManagement/managedDevices",
+        "v1.0",
+        query,
+        top=0,
+        headers={"client-request-id": correlation_id},
+    )
+    return rows
+
+
+async def _resolve_managed_device_reference(
+    *,
+    device_id: str | None,
+    device_name: str | None,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Resolve a managed device by id or operator-friendly name."""
+    if device_id:
+        device, _, _ = await _fetch_single_resource(
+            f"/deviceManagement/managedDevices/{device_id}",
+            "v1.0",
+            correlation_id=correlation_id,
+            select=["id", "deviceName", "userPrincipalName"],
+        )
+        if not device:
+            raise CliError(
+                ErrorPayload(
+                    code=ErrorCode.NOT_FOUND,
+                    message=f"Managed device id not found: {device_id}",
+                    hint="Run `graphconnect read devices.list_managed` to find a valid device id.",
+                )
+            )
+        if device_name and _normalize_match_text(device.get("deviceName")) != _normalize_match_text(device_name):
+            raise CliError(
+                ErrorPayload(
+                    code=ErrorCode.CONFLICT,
+                    message=f"device_id {device_id} does not match device_name '{device_name}'.",
+                    hint=f"Resolved device name: {device.get('deviceName')}",
+                )
+            )
+        return {
+            "id": str(device.get("id")),
+            "name": device.get("deviceName"),
+            "userPrincipalName": device.get("userPrincipalName"),
+        }
+
+    if not device_name:
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.USAGE_ERROR,
+                message="Provide device_id or device_name.",
+                hint="Example: -p device_name=DANAEH-PC",
+            )
+        )
+
+    devices = await _list_managed_devices_for_resolution(
+        correlation_id,
+        filter_expr=f"deviceName eq '{_odata_literal(device_name)}'",
+    )
+    # Fall back to full roster only when the exact-filter missed — handles the
+    # substring match case and tenants where deviceName has leading/trailing
+    # whitespace that $filter can't see through.
+    if not devices:
+        devices = await _list_managed_devices_for_resolution(correlation_id)
+    match = _pick_named_resource(devices, device_name, label="managed device", name_key="deviceName")
+    return {
+        "id": str(match.get("id")),
+        "name": match.get("deviceName"),
+        "userPrincipalName": match.get("userPrincipalName"),
+    }
+
+
+async def _list_policy_lookup(correlation_id: str) -> dict[str, dict[str, Any]]:
+    """Build a policy-id lookup spanning Settings Catalog and classic config profiles."""
+    headers = {"client-request-id": correlation_id}
+    settings_task = _execute_get(
+        "/deviceManagement/configurationPolicies",
+        "beta",
+        {"$select": "id,name"},
+        top=0,
+        headers=headers,
+    )
+    classic_task = _execute_get(
+        "/deviceManagement/deviceConfigurations",
+        "v1.0",
+        {"$select": "id,displayName"},
+        top=0,
+        headers=headers,
+    )
+    (settings_rows, _, _, _, _), (classic_rows, _, _, _, _) = await asyncio.gather(
+        settings_task, classic_task
+    )
+
+    lookup: dict[str, dict[str, Any]] = {}
+    for row in settings_rows:
+        policy_id = row.get("id")
+        if policy_id:
+            lookup[str(policy_id)] = {
+                "id": str(policy_id),
+                "name": row.get("name"),
+                "kind": "settings_catalog",
+            }
+    for row in classic_rows:
+        policy_id = row.get("id")
+        if policy_id:
+            lookup[str(policy_id)] = {
+                "id": str(policy_id),
+                "name": row.get("displayName"),
+                "kind": "config_profile",
+            }
+    return lookup
+
+
+_POLICY_KIND_ENDPOINTS = (
+    ("settings_catalog", "/deviceManagement/configurationPolicies", "beta", "name"),
+    ("config_profile", "/deviceManagement/deviceConfigurations", "v1.0", "displayName"),
+)
+
+
+async def _fetch_policy_by_id(
+    policy_id: str,
+    *,
+    policy_kind: str,
+    correlation_id: str,
+) -> dict[str, Any] | None:
+    """Fetch a single policy by id, trying the endpoint(s) matching policy_kind."""
+    endpoints = [
+        (kind, endpoint, version, name_field)
+        for kind, endpoint, version, name_field in _POLICY_KIND_ENDPOINTS
+        if policy_kind == "auto" or kind == policy_kind
+    ]
+    for kind, endpoint, version, name_field in endpoints:
+        resource, _, _ = await _fetch_single_resource(
+            f"{endpoint}/{policy_id}",
+            version,
+            correlation_id=correlation_id,
+            select=["id", name_field],
+        )
+        if resource:
+            return {"id": str(resource.get("id")), "name": resource.get(name_field), "kind": kind}
+    return None
+
+
+async def _resolve_policy_reference(
+    *,
+    policy_id: str | None,
+    policy_name: str | None,
+    policy_kind: str | None,
+    correlation_id: str,
+    policy_lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve a policy id/name across Settings Catalog and classic config profiles.
+
+    Pass `policy_lookup` to reuse a prefetched lookup dict (e.g., when the caller
+    also needs it for overlap annotation) instead of refetching.
+    """
+    kind_filter = (policy_kind or "auto").strip().lower()
+
+    if policy_id:
+        match = await _fetch_policy_by_id(policy_id, policy_kind=kind_filter, correlation_id=correlation_id)
+        if not match:
+            raise CliError(
+                ErrorPayload(
+                    code=ErrorCode.NOT_FOUND,
+                    message=f"Configuration policy id not found: {policy_id}",
+                    hint="Run `graphconnect read policies.list_settings_catalog` and `graphconnect read policies.list_config_profiles` to find a valid policy id.",
+                )
+            )
+        if policy_name and _normalize_match_text(match.get("name")) != _normalize_match_text(policy_name):
+            raise CliError(
+                ErrorPayload(
+                    code=ErrorCode.CONFLICT,
+                    message=f"policy_id {policy_id} does not match policy_name '{policy_name}'.",
+                    hint=f"Resolved policy name: {match.get('name')}",
+                )
+            )
+        return match
+
+    if not policy_name:
+        raise CliError(
+            ErrorPayload(
+                code=ErrorCode.USAGE_ERROR,
+                message="Provide policy_id or policy_name.",
+                hint="Example: -p policy_name=BitLocker",
+            )
+        )
+
+    lookup = policy_lookup if policy_lookup is not None else await _list_policy_lookup(correlation_id)
+    candidates = list(lookup.values())
+    if kind_filter != "auto":
+        candidates = [row for row in candidates if row.get("kind") == kind_filter]
+    return _pick_named_resource(candidates, policy_name, label="configuration policy", name_key="name")
+
+
+async def _resolve_policy_setting_context(
+    parameters: dict[str, Any],
+    correlation_id: str,
+    *,
+    policy_lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve the device and policy references needed for policy setting reports."""
+    device, policy = await asyncio.gather(
+        _resolve_managed_device_reference(
+            device_id=parameters.get("device_id"),
+            device_name=parameters.get("device_name"),
+            correlation_id=correlation_id,
+        ),
+        _resolve_policy_reference(
+            policy_id=parameters.get("policy_id"),
+            policy_name=parameters.get("policy_name"),
+            policy_kind=str(parameters.get("policy_kind") or "auto"),
+            correlation_id=correlation_id,
+            policy_lookup=policy_lookup,
+        ),
+    )
+    return {
+        "device_id": device["id"],
+        "device_name": device.get("name"),
+        "device_user_principal_name": device.get("userPrincipalName"),
+        "policy_id": policy["id"],
+        "policy_name": policy.get("name"),
+        "policy_kind": policy.get("kind"),
+    }
+
+
+def _merge_resolved_policy_setting_params(
+    parameters: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Back-fill resolved device/policy identifiers into parameters for audit logging."""
+    resolved = dict(parameters)
+    resolved["device_id"] = context["device_id"]
+    resolved["policy_id"] = context["policy_id"]
+    if context.get("device_name"):
+        resolved.setdefault("device_name", context["device_name"])
+    if context.get("policy_name"):
+        resolved.setdefault("policy_name", context["policy_name"])
+    if context.get("policy_kind"):
+        resolved["policy_kind"] = context["policy_kind"]
+    return resolved
+
+
+def _policy_setting_report_body(*, device_id: str, policy_id: str | None = None) -> dict[str, Any]:
+    """Build the Intune exportJobs request body for policy setting status rows."""
+    filters = [f"(DeviceId eq '{_odata_literal(device_id)}')"]
+    if policy_id:
+        filters.append(f"(PolicyId eq '{_odata_literal(policy_id)}')")
+    return {
+        "reportName": "DevicePolicySettingsComplianceReport",
+        "format": "json",
+        "select": list(_POLICY_SETTING_REPORT_SELECT),
+        "filter": " and ".join(filters),
+    }
+
+
+async def _fetch_policy_setting_rows(
+    device_id: str,
+    *,
+    policy_id: str | None = None,
+    correlation_id: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fetch raw per-setting rows for one device, optionally scoped to one policy."""
+    rows, _, _, bytes_read, _ = await _execute_export_job_read(
+        url="/deviceManagement/reports/exportJobs",
+        api_version="beta",
+        request_body=_policy_setting_report_body(device_id=device_id, policy_id=policy_id),
+        headers={"client-request-id": correlation_id},
+        top=0,
+        correlation_id=correlation_id,
+    )
+    return _dedupe_rows(rows, _POLICY_SETTING_DEDUPE_FIELDS), bytes_read
+
+
+def _policy_setting_status_label(row: dict[str, Any]) -> str | None:
+    """Return a consistent human-readable status label from raw or projected rows."""
+    status = row.get("Status")
+    if isinstance(status, str) and status:
+        return status
+    loc = row.get("SettingStatus_loc")
+    if isinstance(loc, str) and loc:
+        return loc
+    raw = row.get("SettingStatus")
+    return _POLICY_SETTING_STATUS_BY_CODE.get(raw) if isinstance(raw, int) else None
+
+
+def _filter_policy_failure_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only rows whose status is a real failure signal."""
+    return [row for row in rows if _policy_setting_status_label(row) in _POLICY_SETTING_FAILURE_STATUSES]
+
+
+def _attach_overlap_context(
+    rows: list[dict[str, Any]],
+    *,
+    all_device_rows: list[dict[str, Any]],
+    target_policy_id: str,
+    policy_lookup: dict[str, dict[str, Any]],
+) -> None:
+    """Annotate rows with other policies on the same device touching the same setting."""
+    by_setting: dict[str, set[str]] = {}
+    for row in all_device_rows:
+        setting_name = row.get("SettingName")
+        policy_id = row.get("PolicyId")
+        if not setting_name or not policy_id or policy_id == target_policy_id:
+            continue
+        by_setting.setdefault(str(setting_name), set()).add(str(policy_id))
+
+    for row in rows:
+        other_ids = sorted(by_setting.get(str(row.get("SettingName") or ""), set()))
+        if not other_ids:
+            continue
+        other_names = [
+            policy_lookup.get(policy_id, {}).get("name") or f"retired-or-missing-policy ({policy_id})"
+            for policy_id in other_ids
+        ]
+        row["OtherPolicyIds"] = other_ids
+        row["OtherPolicies"] = other_names
+        if _policy_setting_status_label(row) == "Conflict":
+            row["ConflictHint"] = "Also set by: " + ", ".join(other_names)
+
+
+async def _fetch_policy_setting_rows_for_target(
+    *,
+    device_id: str,
+    target_policy_id: str,
+    want_overlap: bool,
+    correlation_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Fetch target + (optionally) all-device rows for one device.
+
+    When overlap is wanted, the device-wide export is a strict superset of the
+    policy-filtered export — derive the target rows client-side instead of
+    running a second export (each export takes ~10-30s).
+    Returns (target_rows, all_device_rows, bytes_read). all_device_rows is []
+    when overlap is not requested.
+    """
+    if want_overlap:
+        all_rows, bytes_read = await _fetch_policy_setting_rows(
+            device_id,
+            correlation_id=correlation_id,
+        )
+        target_rows = [row for row in all_rows if str(row.get("PolicyId") or "") == target_policy_id]
+        return target_rows, all_rows, bytes_read
+    target_rows, bytes_read = await _fetch_policy_setting_rows(
+        device_id,
+        policy_id=target_policy_id,
+        correlation_id=correlation_id,
+    )
+    return target_rows, [], bytes_read
+
+
+async def _execute_policy_setting_statuses(
+    *,
+    parameters: dict[str, Any],
+    top: int,
+    correlation_id: str,
+) -> tuple[list[dict[str, Any]], int | None, bool, int, int | None, dict[str, Any]]:
+    """Resolve names, fetch per-setting rows for one device/policy, optionally with overlap."""
+    want_overlap = bool(parameters.get("include_overlap_context"))
+
+    # Prefetch the policy lookup when overlap is requested so name resolution
+    # and overlap annotation share a single fetch (two Graph calls total
+    # instead of four).
+    policy_lookup = await _list_policy_lookup(correlation_id) if want_overlap else None
+    context = await _resolve_policy_setting_context(
+        parameters, correlation_id, policy_lookup=policy_lookup
+    )
+    resolved = _merge_resolved_policy_setting_params(parameters, context)
+    target_policy_id = context["policy_id"]
+
+    target_rows, all_rows, bytes_read = await _fetch_policy_setting_rows_for_target(
+        device_id=context["device_id"],
+        target_policy_id=target_policy_id,
+        want_overlap=want_overlap,
+        correlation_id=correlation_id,
+    )
+    if want_overlap:
+        _attach_overlap_context(
+            target_rows,
+            all_device_rows=all_rows,
+            target_policy_id=target_policy_id,
+            policy_lookup=policy_lookup or {},
+        )
+    return target_rows, None, False, bytes_read, 200, resolved
+
+
+async def _execute_explain_policy_failure(
+    *,
+    parameters: dict[str, Any],
+    top: int,
+    correlation_id: str,
+) -> tuple[list[dict[str, Any]], int | None, bool, int, int | None]:
+    """Resolve names, fetch exact policy setting rows, and annotate the likely cause."""
+    want_overlap = parameters.get("include_overlap_context", True)
+
+    policy_lookup = await _list_policy_lookup(correlation_id) if want_overlap else None
+    context = await _resolve_policy_setting_context(
+        parameters, correlation_id, policy_lookup=policy_lookup
+    )
+    target_policy_id = context["policy_id"]
+
+    rows, all_rows, bytes_read = await _fetch_policy_setting_rows_for_target(
+        device_id=context["device_id"],
+        target_policy_id=target_policy_id,
+        want_overlap=want_overlap,
+        correlation_id=correlation_id,
+    )
+
+    if not parameters.get("include_compliant"):
+        rows = _filter_policy_failure_rows(rows)
+
+    if want_overlap:
+        _attach_overlap_context(
+            rows,
+            all_device_rows=all_rows,
+            target_policy_id=target_policy_id,
+            policy_lookup=policy_lookup or {},
+        )
+
+    for row in rows:
+        row["DeviceName"] = context.get("device_name")
+        row["PolicyName"] = context.get("policy_name")
+        row["PolicyKind"] = context.get("policy_kind")
+
+    rows.sort(key=lambda row: (_policy_setting_status_label(row) not in _POLICY_SETTING_FAILURE_STATUSES, str(row.get("SettingName") or "")))
+    sliced, total_count, has_more = _truncate_rows(rows, top)
+    return sliced, total_count, has_more, bytes_read, 200
 
 
 async def preview_write(
@@ -573,7 +1149,7 @@ def _build_query_params(
         if param.maps_to_filter:
             if param.multi:
                 items = [item.strip() for item in raw_value.split(",") if item.strip()]
-                rendered = ",".join("'" + item.replace("'", "''") + "'" for item in items)
+                rendered = ",".join(f"'{_odata_literal(item)}'" for item in items)
             else:
                 rendered = raw_value
             mapped = param.maps_to_filter.replace("{value}", rendered)
@@ -973,10 +1549,15 @@ async def _paginate_graph_response(
     """Walk @odata.nextLink pages up to `top` items, summing raw payload bytes from each fetch.
 
     Pass top<=0 for unbounded pagination (fetch every page).
+
+    PowerShell's Invoke-MgGraphRequest injects @odata.count = page length on every
+    response regardless of $count=true, so only trust the field when the caller
+    actually requested $count (i.e., Graph is returning a real server-side total).
     """
     unbounded = top <= 0
     response_data, bytes_seen, http_status = await fetch(first_url)
-    total_count = response_data.get("@odata.count")
+    trust_odata_count = "$count=true" in first_url or "%24count=true" in first_url
+    total_count = response_data.get("@odata.count") if trust_odata_count else None
     next_link = response_data.get("@odata.nextLink")
     collected = list(response_data.get("value", []))
     while next_link and (unbounded or len(collected) < top):
@@ -1096,6 +1677,200 @@ async def _execute_mutation(
         return json.loads(native_response), len(native_response), expected_status
     except json.JSONDecodeError:
         return None, len(native_response), expected_status
+
+
+def _truncate_rows(rows: list[dict[str, Any]], top: int) -> tuple[list[dict[str, Any]], int, bool]:
+    """Slice rows for return; return (rows, total_count, has_more). top<=0 means no limit."""
+    total_count = len(rows)
+    if top > 0:
+        return rows[:top], total_count, total_count > top
+    return rows, total_count, False
+
+
+def _export_cache_key(url: str, api_version: str, request_body: dict[str, Any]) -> str:
+    """Hash a report export request into a stable cache key.
+
+    Includes the active principal so two operators (or two tenants after re-auth)
+    sharing the same machine cannot read each other's report rows.
+    """
+    payload = json.dumps(
+        {
+            "principal": peek_user_principal(),
+            "url": url,
+            "api_version": api_version,
+            "request_body": request_body,
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_cached_export_rows(
+    *,
+    url: str,
+    api_version: str,
+    request_body: dict[str, Any],
+    ttl_seconds: int = _EXPORT_CACHE_TTL_SECONDS,
+) -> tuple[list[dict[str, Any]], int] | None:
+    """Return cached Intune export rows when the request body matches and the cache is fresh."""
+    cache_file = _EXPORT_CACHE_DIR / f"{_export_cache_key(url, api_version, request_body)}.json"
+    try:
+        raw = cache_file.read_bytes()
+        payload = json.loads(raw.decode("utf-8"))
+        saved_dt = datetime.fromisoformat(str(payload["saved_at"]).replace("Z", "+00:00"))
+        rows = payload["rows"]
+        assert isinstance(rows, list)
+    except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError, AssertionError):
+        return None
+    if (datetime.now(timezone.utc) - saved_dt).total_seconds() > ttl_seconds:
+        return None
+    return [row for row in rows if isinstance(row, dict)], len(raw)
+
+
+def _store_cached_export_rows(
+    *,
+    url: str,
+    api_version: str,
+    request_body: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> None:
+    """Persist Intune export rows for short-term reuse inside repeated troubleshooting loops."""
+    cache_file = _EXPORT_CACHE_DIR / f"{_export_cache_key(url, api_version, request_body)}.json"
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "rows": rows,
+    }
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    except OSError:
+        return
+
+
+async def _execute_export_job_read(
+    *,
+    url: str,
+    api_version: str,
+    request_body: dict[str, Any],
+    headers: dict[str, str] | None,
+    top: int,
+    correlation_id: str,
+) -> tuple[list[dict[str, Any]], int | None, bool, int, int | None]:
+    """Create an Intune export job, poll it to completion, and download rows."""
+    cached = _load_cached_export_rows(url=url, api_version=api_version, request_body=request_body)
+    if cached is not None:
+        rows, bytes_read = cached
+        sliced, total_count, has_more = _truncate_rows(rows, top)
+        return sliced, total_count, has_more, bytes_read, 200
+
+    job, bytes_read, http_status = await _execute_mutation(
+        method="POST",
+        url=url,
+        api_version=api_version,
+        body=request_body,
+        headers=headers,
+        expected_status=201,
+    )
+    if not isinstance(job, dict):
+        raise RuntimeError("Export job creation returned no payload.")
+
+    job_status = job
+    job_id = job_status.get("id")
+    if not job_id:
+        raise RuntimeError("Export job creation did not return an id.")
+
+    deadline = time.monotonic() + _EXPORT_JOB_DEADLINE_SECONDS
+    poll_status = http_status
+
+    while True:
+        status = str(job_status.get("status") or "").lower()
+        download_url = job_status.get("url")
+        if status == "completed" and download_url:
+            rows, download_bytes = await _download_export_rows(str(download_url))
+            bytes_read += download_bytes
+            _store_cached_export_rows(url=url, api_version=api_version, request_body=request_body, rows=rows)
+            sliced, total_count, has_more = _truncate_rows(rows, top)
+            return sliced, total_count, has_more, bytes_read, poll_status
+        if status in {"failed", "failure", "cancelled", "unknown"}:
+            raise RuntimeError(f"Export job {job_id} ended in status '{job_status.get('status')}'.")
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Export job {job_id} did not complete within {_EXPORT_JOB_DEADLINE_SECONDS} seconds."
+            )
+
+        await asyncio.sleep(_EXPORT_JOB_POLL_INTERVAL_SECONDS)
+        job_status, poll_bytes, poll_status = await _fetch_single_resource(
+            f"{url}/{job_id}",
+            api_version,
+            correlation_id=correlation_id,
+        )
+        bytes_read += poll_bytes
+        if job_status is None:
+            raise RuntimeError(f"Export job {job_id} could not be read after creation.")
+
+
+async def _download_export_rows(download_url: str) -> tuple[list[dict[str, Any]], int]:
+    """Download an Intune export artifact and return normalized row dicts."""
+    return await asyncio.to_thread(_download_export_rows_sync, download_url)
+
+
+def _download_export_rows_sync(download_url: str) -> tuple[list[dict[str, Any]], int]:
+    """Blocking half of export download and payload normalization."""
+    with urlopen(download_url, timeout=60) as response:  # nosec B310: Graph returns a signed blob URL
+        payload = response.read()
+    return _parse_export_payload(payload), len(payload)
+
+
+def _parse_export_payload(payload: bytes) -> list[dict[str, Any]]:
+    """Parse a zipped Intune export artifact into normalized row dicts."""
+    if zipfile.is_zipfile(io.BytesIO(payload)):
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = [name for name in archive.namelist() if not name.endswith("/")]
+            if not names:
+                return []
+            first_name = names[0]
+            raw = archive.read(first_name)
+        return _parse_export_document(raw, first_name)
+    return _parse_export_document(payload, "export.json")
+
+
+def _parse_export_document(raw: bytes, name: str) -> list[dict[str, Any]]:
+    """Parse a single export file based on its extension."""
+    lowered = name.lower()
+    if lowered.endswith(".json"):
+        document = json.loads(raw.decode("utf-8-sig"))
+        return _normalize_export_rows(document)
+    if lowered.endswith(".csv"):
+        text = raw.decode("utf-8-sig")
+        return list(csv.DictReader(io.StringIO(text)))
+    raise RuntimeError(f"Unsupported Intune export format: {name}")
+
+
+def _normalize_export_rows(document: Any) -> list[dict[str, Any]]:
+    """Normalize common Intune export JSON shapes into row dicts."""
+    if isinstance(document, list):
+        return [row for row in document if isinstance(row, dict)]
+    if not isinstance(document, dict):
+        return []
+
+    values = document.get("values")
+    columns = document.get("columns")
+    if isinstance(values, list):
+        if values and isinstance(values[0], dict):
+            return [row for row in values if isinstance(row, dict)]
+        if isinstance(columns, list):
+            out: list[dict[str, Any]] = []
+            for row in values:
+                if isinstance(row, list):
+                    out.append({str(columns[i]): row[i] for i in range(min(len(columns), len(row)))})
+            return out
+
+    for key in ("Results", "results", "Rows", "rows", "value"):
+        child = document.get(key)
+        if isinstance(child, list):
+            return [row for row in child if isinstance(row, dict)]
+    return []
 
 
 def _normalize_post_read_response(
@@ -1228,6 +2003,31 @@ def _apply_operation_specific_postprocess(operation_id: str, rows: list[dict[str
                     if isinstance(m, dict)
                 ]
                 row["memberCount"] = len(members)
+    elif operation_id in {"devices.policy_setting_statuses", "devices.explain_policy_failure"}:
+        for row in rows:
+            row["SettingLabel"] = _humanize_setting_name(row.get("SettingName") or row.get("SettingNm"))
+            error_code = row.get("ErrorCode")
+            if isinstance(error_code, int) and error_code in _INTUNE_ERROR_HINTS:
+                row["ErrorHint"] = _INTUNE_ERROR_HINTS[error_code]
+            elif row.get("StateDetails_loc"):
+                row["ErrorHint"] = row.get("StateDetails_loc")
+
+
+def _humanize_setting_name(value: Any) -> str | None:
+    """Convert Intune setting identifiers into a label operators can scan quickly."""
+    if not isinstance(value, str) or not value:
+        return None
+    parts = [part for part in value.split("_") if part]
+    humanized = [_humanize_setting_token(part) for part in parts]
+    return " - ".join(part for part in humanized if part)
+
+
+def _humanize_setting_token(token: str) -> str:
+    """Expand CamelCase and numeric suffixes in one setting-name token."""
+    token = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", token)
+    token = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", token)
+    token = re.sub(r"([A-Za-z])(\d+)", r"\1 \2", token)
+    return token.strip()
 
 
 def _normalize_values(value: Any) -> Any:
@@ -1319,8 +2119,37 @@ _MANAGED_DEVICE_UNSELECTABLE = (
     "deviceCategoryDisplayName",
 )
 
+# Graph 404/ResourceNotFound responses point at a parent collection; map each
+# collection segment to the catalog op that lists valid IDs for it so the hint
+# tells the operator what to run next instead of saying "check the ID".
+_PARENT_COLLECTION_TO_LIST_OP = (
+    ("/configurationPolicies/", "policies.list_settings_catalog"),
+    ("/deviceConfigurations/", "policies.list_config_profiles"),
+    ("/deviceCompliancePolicies/", "policies.list_compliance_policies"),
+    ("/compliancePolicies/", "policies.list_modern_compliance"),
+    ("/intents/", "policies.list_intent_profiles"),
+    ("/templates/", "policies.list_baseline_templates"),
+    ("/managedDevices/", "devices.list_managed"),
+    ("/devices/", "devices.list_entra"),
+    ("/groups/", "groups.list_all"),
+    ("/users/", "users.list_all"),
+    ("/identity/conditionalAccess/policies/", "conditional_access.list_policies"),
+)
 
-def _specialized_hint(message: str, http_status: int | None) -> str | None:
+
+def _list_op_for_missing_resource(message: str) -> str | None:
+    """Pick the catalog list op whose collection matches the failing path segment."""
+    for segment, op in _PARENT_COLLECTION_TO_LIST_OP:
+        if segment in message:
+            return op
+    return None
+
+
+def _specialized_hint(
+    message: str,
+    http_status: int | None,
+    graph_error_code: str | None = None,
+) -> str | None:
     """Return a focused hint for known Graph quirks. None if nothing matches.
 
     Keep this list short and empirical — hints are loud, and a wrong hint
@@ -1344,6 +2173,18 @@ def _specialized_hint(message: str, http_status: int | None) -> str | None:
                     "in v1.0 — Microsoft documents it but the OData schema rejects it. "
                     "Drop it from your --select list."
                 )
+    # Intune wraps missing-collection-segment errors as 400 BadRequest with an
+    # inner ResourceNotFound code; treat both shapes the same here.
+    if graph_error_code == "ResourceNotFound" or (
+        http_status == 404 and "ResourceNotFound" in message
+    ):
+        list_op = _list_op_for_missing_resource(message)
+        if list_op:
+            return (
+                f"Resource id not found. Run `graphconnect read {list_op}` "
+                "to find valid IDs (tenant or scope mismatch is the other common cause)."
+            )
+        return "Resource id not found. Run `graphconnect catalog search <keyword>` to find the list op that enumerates valid IDs for this path."
     return None
 
 
@@ -1371,7 +2212,7 @@ def _map_graph_exception(exc: Exception, correlation_id: str | None = None) -> E
             correlation_id=correlation_id,
         )
 
-    specialized = _specialized_hint(message, http_status)
+    specialized = _specialized_hint(message, http_status, graph_error_code)
 
     if http_status is None:
         return ErrorPayload(
@@ -1391,6 +2232,10 @@ def _map_graph_exception(exc: Exception, correlation_id: str | None = None) -> E
         429: ErrorCode.THROTTLED,
     }
     code = code_map.get(http_status, ErrorCode.UPSTREAM_ERROR)
+    # Intune wraps missing-resource errors as 400 BadRequest with inner
+    # ResourceNotFound; reclassify so scripts get the NOT_FOUND exit code.
+    if graph_error_code == "ResourceNotFound":
+        code = ErrorCode.NOT_FOUND
 
     hints = {
         ErrorCode.PERMISSION_DENIED: "Missing Graph scope. Re-run `graphconnect auth login` and grant the required permission.",

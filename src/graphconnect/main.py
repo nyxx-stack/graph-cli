@@ -271,6 +271,10 @@ def catalog_detail(
                 "default_select": entry.default_select,
                 "default_filter": entry.default_filter,
                 "default_orderby": entry.default_orderby,
+                "default_expand": entry.default_expand,
+                "projections": [proj.model_dump(exclude_none=True) for proj in entry.projections],
+                "drop_paths": entry.drop_paths,
+                "dedupe_by": entry.dedupe_by,
                 "graph_permissions": entry.graph_permissions,
                 "rate_limit_class": entry.rate_limit_class,
                 "response_schema_key": entry.response_schema,
@@ -313,6 +317,15 @@ def catalog_detail(
                 console.print(f"    Values: {', '.join(param.enum)}")
     if entry.default_select:
         console.print(f"\nDefault fields: {', '.join(entry.default_select)}")
+    if entry.projections:
+        console.print("Projections:")
+        for proj in entry.projections:
+            mapped = " (enum-mapped)" if proj.enum_map else ""
+            console.print(f"  {proj.name} <- {proj.path}{mapped}")
+    if entry.dedupe_by:
+        console.print(f"Dedupe by: {', '.join(entry.dedupe_by)}")
+    if entry.drop_paths:
+        console.print(f"Drop paths: {', '.join(entry.drop_paths)}")
     if entry.graph_permissions:
         console.print(f"Permissions: {', '.join(entry.graph_permissions)}")
     if entry.cmmc_controls:

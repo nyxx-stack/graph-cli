@@ -165,6 +165,157 @@ operations:
     tags: ["configuration", "state", "device", "policy", "intune", "troubleshooting"]
     cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2"]
 
+  - id: "devices.policy_setting_statuses"
+    aliases: ["devices.configuration_setting_statuses", "policies.device_setting_statuses"]
+    rate_limit_class: "heavy"
+    summary: "List per-setting Intune configuration status for one device under one policy"
+    description: >
+      Uses the Intune export report DevicePolicySettingsComplianceReportV3 to
+      return the exact setting rows for a managed device under a specific
+      configuration policy. This is the settings-level drilldown shown in the
+      Intune portal when a device is in Conflict or Error for a Settings
+      Catalog / configuration profile. Because Graph generates an export job
+      and then a signed download, reads can take ~10-30 seconds.
+    domain: "devices"
+    safety_tier: "read"
+    method: "POST"
+    endpoint: "/deviceManagement/reports/exportJobs"
+    api_version: "beta"
+    download_export: true
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: false
+        description: "Intune managedDevice id"
+      - name: "device_name"
+        type: "string"
+        required: false
+        description: "Managed device name (exact or unique substring)"
+      - name: "policy_id"
+        type: "string"
+        required: false
+        description: "Configuration policy id (for example from policies.list_settings_catalog)"
+      - name: "policy_name"
+        type: "string"
+        required: false
+        description: "Configuration policy name (exact or unique substring)"
+      - name: "policy_kind"
+        type: "string"
+        required: false
+        default: "auto"
+        enum: ["auto", "settings_catalog", "config_profile"]
+        description: "Policy family hint when the name is ambiguous"
+      - name: "failures_only"
+        type: "boolean"
+        required: false
+        default: false
+        description: "Return only Conflict/Error/NonCompliant rows"
+      - name: "include_overlap_context"
+        type: "boolean"
+        required: false
+        default: false
+        description: "Annotate rows with other policies touching the same setting on this device"
+    body_template:
+      reportName: "DevicePolicySettingsComplianceReport"
+      format: "json"
+      select:
+        - "DeviceId"
+        - "PolicyId"
+        - "SettingId"
+        - "SettingInstanceId"
+        - "SettingName"
+        - "SettingNm"
+        - "SettingStatus"
+        - "StateDetails"
+        - "ErrorCode"
+        - "ErrorType"
+        - "SettingValue"
+        - "UserId"
+      filter: "(DeviceId eq '{device_id}') and (PolicyId eq '{policy_id}')"
+    projections:
+      - name: "Status"
+        path: "SettingStatus"
+        enum_map:
+          "0": "Unknown"
+          "1": "NotApplicable"
+          "2": "Compliant"
+          "3": "Remediated"
+          "4": "NonCompliant"
+          "5": "Error"
+          "6": "Conflict"
+    dedupe_by: ["DeviceId", "PolicyId", "SettingInstanceId", "SettingStatus"]
+    tags: ["configuration", "setting-state", "device", "policy", "intune", "troubleshooting", "settings-catalog", "conflict", "error", "reports"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "AU.L2-3.3.1"]
+    examples:
+      - description: "Exact setting statuses for one device under one policy"
+        parameters:
+          device_id: "<managed-device-id>"
+          policy_id: "<settings-catalog-policy-id>"
+      - description: "Resolve by names and show only failures"
+        parameters:
+          device_name: "DANAEH-PC"
+          policy_name: "Audit and Event Logging"
+          failures_only: true
+
+  - id: "devices.explain_policy_failure"
+    aliases: ["devices.explain_config_failure", "devices.explain_policy_conflict"]
+    rate_limit_class: "heavy"
+    summary: "Explain why a device is failing or conflicting on a configuration policy"
+    description: >
+      Operator-friendly helper over devices.policy_setting_statuses. Resolves
+      device and policy by name when needed, returns only failing settings by
+      default, and annotates each row with likely overlapping policies on the
+      same device when the setting is in Conflict.
+    domain: "devices"
+    safety_tier: "read"
+    method: "GET"
+    endpoint: "/internal/devices/explainPolicyFailure"
+    graph_permissions:
+      - "DeviceManagementConfiguration.Read.All"
+      - "DeviceManagementManagedDevices.Read.All"
+    parameters:
+      - name: "device_id"
+        type: "string"
+        required: false
+        description: "Intune managedDevice id"
+      - name: "device_name"
+        type: "string"
+        required: false
+        description: "Managed device name (exact or unique substring)"
+      - name: "policy_id"
+        type: "string"
+        required: false
+        description: "Configuration policy id"
+      - name: "policy_name"
+        type: "string"
+        required: false
+        description: "Configuration policy name (exact or unique substring)"
+      - name: "policy_kind"
+        type: "string"
+        required: false
+        default: "auto"
+        enum: ["auto", "settings_catalog", "config_profile"]
+        description: "Policy family hint when the name is ambiguous"
+      - name: "include_compliant"
+        type: "boolean"
+        required: false
+        default: false
+        description: "Include compliant settings instead of only failures"
+      - name: "include_overlap_context"
+        type: "boolean"
+        required: false
+        default: true
+        description: "Annotate rows with other policies touching the same setting on this device"
+    tags: ["configuration", "setting-state", "device", "policy", "intune", "troubleshooting", "conflict", "error", "explain"]
+    cmmc_controls: ["CM.L2-3.4.1", "CM.L2-3.4.2", "AU.L2-3.3.1"]
+    examples:
+      - description: "Explain a remaining BitLocker conflict by name"
+        parameters:
+          device_name: "HENRY-PC"
+          policy_name: "BitLocker"
+
   - id: "devices.sync_device"
     aliases: ["devices.sync"]
     rate_limit_class: "standard"
@@ -368,17 +519,27 @@ operations:
         default: 180
     default_select:
       - "id"
+      - "deviceId"
       - "displayName"
       - "operatingSystem"
       - "operatingSystemVersion"
       - "trustType"
       - "isManaged"
       - "isCompliant"
+      - "mdmAppId"
+      - "profileType"
       - "approximateLastSignInDateTime"
       - "accountEnabled"
       - "registrationDateTime"
     default_orderby: "approximateLastSignInDateTime asc"
     computed_filter: "approximateLastSignInDateTime le {cutoff_datetime}"
+    projections:
+      - name: "joinKind"
+        path: "trustType"
+        enum_map:
+          "ServerAd": "hybrid-joined"
+          "AzureAd": "entra-joined"
+          "Workplace": "registered"
     tags: ["entra", "stale", "inactive", "cleanup", "directory"]
     cmmc_controls: ["CM.L2-3.4.1"]
     examples:

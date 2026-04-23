@@ -484,7 +484,10 @@ operations:
     method: "GET"
     endpoint: "/deviceManagement/templates"
     api_version: "beta"
-
+    # /deviceManagement/templates silently truncates to $top items with no
+    # @odata.nextLink, so passing $top=5 returns 5 rows and reports has_more=false
+    # while 16 actually exist. Skip $top; Graph returns the full list anyway.
+    supports_top: false
     graph_permissions:
       - "DeviceManagementConfiguration.Read.All"
     parameters:

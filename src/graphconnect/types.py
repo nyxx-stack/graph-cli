@@ -130,6 +130,7 @@ class CatalogEntry(BaseModel):
     rate_limit_class: str | None = None  # Free-form tag: light|standard|heavy|throttle_sensitive
     projections: list[CatalogProjection] = Field(default_factory=list)
     drop_paths: list[str] = Field(default_factory=list)
+    download_export: bool = False  # POST /reports/exportJobs: poll + download result payload
     # Drop rows whose tuple of these field values matches a previously-seen row
     # (keeps first occurrence). Use on endpoints where Graph returns the same
     # logical row once per user on multi-user devices. Callers can override with

@@ -426,10 +426,15 @@ def status() -> AuthStatus:
     try:
         context = _get_credential()
         if context.credential is None:
+            # Graph PowerShell path: Get-MgContext exposes the UPN but not the
+            # display name; fetch /me with a narrow $select so `auth status` is
+            # useful for human operators without adding much latency.
+            display_name = _peek_display_name_via_powershell()
             return AuthStatus(
                 authenticated=True,
                 auth_method=context.auth_method,
                 user_principal=context.user_principal,
+                display_name=display_name,
                 scopes=list(context.scopes),
             )
 
@@ -444,6 +449,30 @@ def status() -> AuthStatus:
         )
     except Exception:
         return AuthStatus(authenticated=False)
+
+
+def _peek_display_name_via_powershell() -> str | None:
+    """Best-effort /me GET through Graph PowerShell to populate AuthStatus.display_name.
+
+    Returns None on any failure so `auth status` never becomes flaky on network
+    or permission hiccups; UPN alone is still populated from the cached context.
+    """
+    try:
+        response = invoke_graph_powershell_request(
+            method="GET",
+            url="https://graph.microsoft.com/v1.0/me?$select=displayName",
+            headers={},
+        )
+    except Exception:
+        return None
+    if not isinstance(response, dict):
+        return None
+    body = response.get("body") if "body" in response else response
+    if isinstance(body, dict):
+        value = body.get("displayName")
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 def get_auth_context(force_new: bool = False) -> CredentialContext:

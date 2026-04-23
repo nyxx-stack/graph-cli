@@ -8,24 +8,15 @@ from typing import Optional
 
 import typer
 
+from graphconnect.output import emit
 from graphconnect.selectors import (
     AmbiguousMatch,
     Locator,
     NotFound,
     find as selector_find,
 )
-from graphconnect.types import Envelope
-
-try:  # pragma: no cover
-    from graphconnect.output import emit  # type: ignore
-except Exception:  # pragma: no cover
-    # TODO(merge): replace with real import from envelope-builder.
-    def emit(env: Envelope, *, bare: bool | None = None, format: str = "json") -> None:
-        import json
-        import sys
-
-        print(json.dumps(env.model_dump(), default=str), file=sys.stdout)
-
+from graphconnect.transport import GraphTransportError
+from graphconnect.types import Envelope, ErrorCode, ErrorPayload
 
 _VALID_TYPES = ("device", "user", "group", "policy", "assignment")
 
@@ -35,17 +26,23 @@ def _next_actions_for(locator: Locator) -> list[str]:
         case "device":
             return [
                 f"show device {locator.id}",
-                f"explain policy-failure --device-id {locator.id}",
+                f"explain noncompliance --device {locator.id}",
             ]
         case "user":
-            return [f"show user {locator.id}"]
+            return [
+                f"show user {locator.id}",
+                f"show user {locator.id} --include-groups",
+            ]
         case "group":
             return [
                 f"show group {locator.id}",
-                f"hunt assignment --group-id {locator.id}",
+                f"show group {locator.id} --include-members",
             ]
         case "policy":
-            return [f"show policy {locator.id}"]
+            return [
+                f"show policy {locator.id}",
+                f"explain assignment-drift --policy {locator.id}",
+            ]
         case "assignment":
             return [f"show group {locator.id}"]
     return []
@@ -77,9 +74,6 @@ def register(app: typer.Typer) -> None:
             )
 
         trace_id = uuid.uuid4().hex
-
-        from graphconnect.transport import GraphTransportError
-        from graphconnect.types import ErrorCode, ErrorPayload
 
         try:
             locators = asyncio.run(

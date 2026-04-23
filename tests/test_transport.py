@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from graphconnect.transport import (
     sleep_for_retry,
 )
 from graphconnect.transport.throttle import _parse_retry_after
+import graphconnect.transport.client as client_mod
 
 
 # ---------- test helpers ----------
@@ -31,10 +33,23 @@ def _fast_sleep(monkeypatch):
     """Skip real sleeps but record requested durations."""
     waits: list[float] = []
 
+    class _DummyCredential:
+        def get_token(self, *scopes: str):
+            del scopes
+            return SimpleNamespace(token="stub-token", expires_on=None)
+
+    def fake_context(profile="default"):
+        del profile
+        return SimpleNamespace(
+            credential=_DummyCredential(),
+            scopes=["https://graph.microsoft.com/.default"],
+        )
+
     async def fake_sleep(duration: float) -> None:
         waits.append(duration)
 
     monkeypatch.setattr("graphconnect.transport.client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(client_mod, "_resolve_auth_context", fake_context)
     yield waits
     set_http_client(None)
 
@@ -333,6 +348,64 @@ def test_managed_devices_filter_does_not_inject(_fast_sleep):
     _run(graph_request("GET", "/deviceManagement/managedDevices?$filter=operatingSystem eq 'iOS'"))
     assert "consistencylevel" not in seen["headers"]
     assert "count=true" not in seen["url"]
+
+
+def test_graph_request_uses_delegated_profile_scopes(_fast_sleep, monkeypatch):
+    class FakeCredential:
+        def __init__(self):
+            self.last_scopes = None
+
+        def get_token(self, *scopes: str):
+            self.last_scopes = scopes
+            return SimpleNamespace(token="delegated-token", expires_on=None)
+
+    credential = FakeCredential()
+    def fake_context(profile="default"):
+        del profile
+        return SimpleNamespace(
+            credential=credential,
+            scopes=["User.Read.All", "Group.Read.All"],
+        )
+
+    monkeypatch.setattr(client_mod, "_resolve_auth_context", fake_context)
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"value": []})
+
+    _install_mock(handler)
+    _run(graph_request("GET", "/users"))
+    assert credential.last_scopes == ("User.Read.All", "Group.Read.All")
+    assert seen["authorization"] == "Bearer delegated-token"
+
+
+def test_graph_request_uses_powershell_context_when_no_credential(_fast_sleep, monkeypatch):
+    def fake_context(profile="default"):
+        del profile
+        return SimpleNamespace(
+            credential=None,
+            scopes=["Device.Read.All"],
+        )
+
+    monkeypatch.setattr(client_mod, "_resolve_auth_context", fake_context)
+    async def fake_powershell_request(method, url, **kwargs):
+        del method, url, kwargs
+        return client_mod.GraphResponse(
+            status_code=200,
+            headers={"request-id": "req-ps"},
+            body={"value": [{"id": "u1"}]},
+            request_id="req-ps",
+            trace_id="trace-ps",
+        )
+
+    monkeypatch.setattr(client_mod, "_graph_request_via_powershell", fake_powershell_request)
+
+    response = _run(graph_request("GET", "/users"))
+    assert response.status_code == 200
+    assert response.body == {"value": [{"id": "u1"}]}
+    assert response.request_id == "req-ps"
 
 
 # ---------- graph_request: pagination ----------

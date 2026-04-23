@@ -9,17 +9,13 @@ tests only need to mock the transport boundary.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
-from ._model import AmbiguousMatch, Locator, NotFound
+from graphconnect.transport import GraphTransportError, graph_request
 
-try:  # pragma: no cover - transport may be stubbed in an isolated worktree
-    from graphconnect.transport import graph_request  # type: ignore
-except Exception:  # pragma: no cover
-    async def graph_request(method, path, **kw):  # type: ignore
-        # TODO(merge): replace with real impl from transport-builder
-        raise NotImplementedError("transport stub")
+from ._model import AmbiguousMatch, Locator, NotFound
 
 
 __all__ = [
@@ -31,13 +27,15 @@ __all__ = [
     "find_groups",
     "find_policies",
     "find_users",
+    "looks_like_guid",
+    "value_list",
 ]
 
 
 _GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
-def _looks_like_guid(value: str) -> bool:
+def looks_like_guid(value: str) -> bool:
     return bool(_GUID_RE.match(value.strip()))
 
 
@@ -45,7 +43,7 @@ def _odata_literal(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _value_list(body: Any) -> list[dict[str, Any]]:
+def value_list(body: Any) -> list[dict[str, Any]]:
     if isinstance(body, dict):
         value = body.get("value")
         if isinstance(value, list):
@@ -87,7 +85,7 @@ def _rank_by_query(
 
 
 async def find_devices(query: str, *, profile: str, limit: int) -> list[Locator]:
-    if _looks_like_guid(query):
+    if looks_like_guid(query):
         resp = await graph_request(
             "GET",
             f"/deviceManagement/managedDevices/{query}",
@@ -111,7 +109,7 @@ async def find_devices(query: str, *, profile: str, limit: int) -> list[Locator]
     # Use client-side filter instead of $filter because managedDevices does not
     # support startsWith on deviceName universally; executor.py uses the same
     # fallback pattern (see _resolve_managed_device_reference).
-    rows = _value_list(resp.body)
+    rows = value_list(resp.body)
     ranked = _rank_by_query(rows, query, ("deviceName",))
     # also attempt a server-side filter for better selectivity when the roster
     # is large — harmless if the client-side pass already found matches
@@ -123,7 +121,7 @@ async def find_devices(query: str, *, profile: str, limit: int) -> list[Locator]
             api_version="v1.0",
             top=limit,
         )
-        ranked = _rank_by_query(_value_list(resp.body), query, ("deviceName",))
+        ranked = _rank_by_query(value_list(resp.body), query, ("deviceName",))
     return [_device_locator(row) for row in ranked[:limit]]
 
 
@@ -140,7 +138,7 @@ def _device_locator(row: dict[str, Any]) -> Locator:
 
 
 async def find_users(query: str, *, profile: str, limit: int) -> list[Locator]:
-    if _looks_like_guid(query):
+    if looks_like_guid(query):
         resp = await graph_request(
             "GET",
             f"/users/{query}",
@@ -180,7 +178,7 @@ async def find_users(query: str, *, profile: str, limit: int) -> list[Locator]:
         api_version="v1.0",
         top=limit,
     )
-    rows = _value_list(resp.body)
+    rows = value_list(resp.body)
     ranked = _rank_by_query(rows, query, ("displayName", "userPrincipalName", "mail"))
     return [_user_locator(row) for row in ranked[:limit]]
 
@@ -198,7 +196,7 @@ def _user_locator(row: dict[str, Any]) -> Locator:
 
 
 async def find_groups(query: str, *, profile: str, limit: int) -> list[Locator]:
-    if _looks_like_guid(query):
+    if looks_like_guid(query):
         resp = await graph_request(
             "GET",
             f"/groups/{query}",
@@ -218,7 +216,7 @@ async def find_groups(query: str, *, profile: str, limit: int) -> list[Locator]:
         api_version="v1.0",
         top=limit,
     )
-    rows = _value_list(resp.body)
+    rows = value_list(resp.body)
     ranked = _rank_by_query(rows, query, ("displayName", "mailNickname"))
     return [_group_locator(row) for row in ranked[:limit]]
 
@@ -256,35 +254,38 @@ async def find_policies(
         if not endpoints:
             raise ValueError(f"unknown policy kind: {kind}")
 
-    if _looks_like_guid(query):
-        for policy_kind, endpoint, api_version, name_field, _ in endpoints:
-            try:
-                resp = await graph_request(
-                    "GET",
-                    f"{endpoint}/{query}",
-                    profile=profile,
-                    api_version=api_version,
-                )
-            except Exception:
+    async def _fetch(endpoint: str, api_version: str, *, by_id: bool) -> Any:
+        try:
+            return await graph_request(
+                "GET",
+                f"{endpoint}/{query}" if by_id else endpoint,
+                profile=profile,
+                api_version=api_version,
+                **({} if by_id else {"top": limit}),
+            )
+        except GraphTransportError:
+            return None
+
+    if looks_like_guid(query):
+        responses = await asyncio.gather(
+            *(_fetch(endpoint, api_version, by_id=True) for _, endpoint, api_version, _, _ in endpoints)
+        )
+        for (policy_kind, _, _, name_field, _), resp in zip(endpoints, responses, strict=True):
+            if resp is None:
                 continue
             row = resp.body if isinstance(resp.body, dict) else None
             if row and row.get("id"):
                 return [_policy_locator(row, policy_kind, name_field)]
         return []
 
+    responses = await asyncio.gather(
+        *(_fetch(endpoint, api_version, by_id=False) for _, endpoint, api_version, _, _ in endpoints)
+    )
     collected: list[Locator] = []
-    for policy_kind, endpoint, api_version, name_field, _ in endpoints:
-        try:
-            resp = await graph_request(
-                "GET",
-                endpoint,
-                profile=profile,
-                api_version=api_version,
-                top=limit,
-            )
-        except Exception:
+    for (policy_kind, _, _, name_field, _), resp in zip(endpoints, responses, strict=True):
+        if resp is None:
             continue
-        rows = _value_list(resp.body)
+        rows = value_list(resp.body)
         ranked = _rank_by_query(rows, query, (name_field,))
         collected.extend(_policy_locator(row, policy_kind, name_field) for row in ranked)
     return collected[:limit]
@@ -308,7 +309,7 @@ async def find_assignments(query: str, *, profile: str, limit: int) -> list[Loca
     A fully-specified assignment requires a policy scope to be useful, but for
     exploratory find() we return group hits so callers can drill down.
     """
-    if _looks_like_guid(query):
+    if looks_like_guid(query):
         return []
     groups = await find_groups(query, profile=profile, limit=limit)
     return [

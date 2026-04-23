@@ -18,6 +18,7 @@ from graphconnect.commands.show import (
     register,
 )
 from graphconnect.selectors import Locator
+from graphconnect.transport import GraphTransportError
 
 
 @dataclass
@@ -68,8 +69,7 @@ def test_show_device_basic(monkeypatch: pytest.MonkeyPatch) -> None:
     assert env.data[0]["entity"] == "device"
     assert env.data[0]["id"] == "dev-1"
     assert "LAPTOP-01" in env.summary
-    # next_actions should include an explain suggestion
-    assert any("explain" in na for na in env.next_actions)
+    assert "explain noncompliance --device dev-1" in env.next_actions
 
 
 def test_show_device_include_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,7 +202,7 @@ def test_show_policy_settings_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     assert row["entity"] == "policy"
     assert row["kind"] == "settingsCatalog"
     assert row["id"] == "p-1"
-    assert any("explain policy-failure" in na for na in env.next_actions)
+    assert "explain assignment-drift --policy p-1" in env.next_actions
 
 
 def test_show_policy_include_assignments_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,12 +215,20 @@ def test_show_policy_include_assignments_and_status(monkeypatch: pytest.MonkeyPa
         {
             "/deviceManagement/configurationPolicies/p-1": FakeResp(200, {"id": "p-1"}),
             "/deviceManagement/configurationPolicies/p-1/assignments": FakeResp(200, {"value": [{"id": "p-1_g-1"}]}),
-            "/deviceManagement/configurationPolicies/p-1/deviceStatuses": FakeResp(200, {"value": [{"id": "s-1"}]}),
+            "/deviceManagement/reports/getConfigurationPolicyNonComplianceReport": FakeResp(
+                200,
+                {
+                    "Schema": [{"Column": "IntuneDeviceId"}, {"Column": "PolicyStatus"}],
+                    "Values": [["dev-1", 5]],
+                },
+            ),
         },
     )
     env = asyncio.run(_show_policy_async("p-1", profile="default", include_assignments=True, include_status=True))
     entities = [d["entity"] for d in env.data]
     assert entities == ["policy", "assignments", "status"]
+    status_rows = next(d for d in env.data if d["entity"] == "status")["items"]
+    assert status_rows == [{"IntuneDeviceId": "dev-1", "PolicyStatus": 5, "Status": "Error"}]
 
 
 def test_show_policy_conditional_access_skips_assignment_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,15 +272,14 @@ def test_show_assignment_found(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_show_assignment_falls_back_across_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_transport(
-        monkeypatch,
-        {
-            # configurationPolicies path misses (404 by default)
-            "/deviceManagement/deviceConfigurations/p-2/assignments/p-2_g-1": FakeResp(
-                200, {"id": "p-2_g-1"}
-            ),
-        },
-    )
+    async def fake_graph_request(method: str, path: str, **kw: Any) -> FakeResp:
+        if path == "/deviceManagement/configurationPolicies/p-2/assignments/p-2_g-1":
+            raise GraphTransportError("missing", status_code=404, body={"error": {"message": "missing"}})
+        if path == "/deviceManagement/deviceConfigurations/p-2/assignments/p-2_g-1":
+            return FakeResp(200, {"id": "p-2_g-1"})
+        return FakeResp(404, {"error": {"message": "not found"}})
+
+    monkeypatch.setattr(show_mod, "graph_request", fake_graph_request)
     env = asyncio.run(_show_assignment_async("p-2_g-1", profile="default"))
     assert env.ok is True
     assert env.data[0]["id"] == "p-2_g-1"

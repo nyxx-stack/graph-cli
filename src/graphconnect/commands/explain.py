@@ -19,6 +19,7 @@ from ..explain import (
     policy_failure as _policy_failure,
 )
 from ..output import emit
+from ..selectors import looks_like_guid
 from ..types import Envelope, ErrorCode, ErrorPayload
 
 
@@ -80,9 +81,8 @@ def register(app: typer.Typer) -> None:
         profile: str = typer.Option("default", "--profile"),
         bare: bool = typer.Option(False, "--bare"),
     ) -> None:
-        # Treat a 36-char UUID-ish string as id, else name. Cheap heuristic.
         kwargs: dict = {"profile": profile}
-        if len(device) >= 32 and "-" in device:
+        if looks_like_guid(device):
             kwargs["device_id"] = device
         else:
             kwargs["device_name"] = device
@@ -97,7 +97,7 @@ def register(app: typer.Typer) -> None:
         bare: bool = typer.Option(False, "--bare"),
     ) -> None:
         kwargs: dict = {"profile": profile, "include_groups": include_groups}
-        if len(policy) >= 32 and "-" in policy:
+        if looks_like_guid(policy):
             kwargs["policy_id"] = policy
         else:
             kwargs["policy_name"] = policy

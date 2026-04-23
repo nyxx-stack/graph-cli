@@ -8,9 +8,11 @@ from typing import Any
 
 import typer
 
+from graphconnect.catalog import get_entry
+from graphconnect.executor import _POLICY_SETTING_STATUS_BY_CODE, _render_template_value
 from graphconnect.output import emit
-from graphconnect.selectors import Locator, resolve
-from graphconnect.transport import graph_request
+from graphconnect.selectors import AmbiguousMatch, Locator, NotFound, resolve, value_list
+from graphconnect.transport import GraphTransportError, graph_request
 from graphconnect.types import Envelope, ErrorCode, ErrorPayload
 
 
@@ -25,30 +27,24 @@ def _new_trace_id() -> str:
 
 
 async def _resolve_or_id(query: str, *, type: str, profile: str) -> Locator | None:
-    """Accept an id or a name. Delegates to `selectors.resolve`.
-
-    Any recognized "no match" signal from the resolver (LookupError, or a class
-    named NotFound / AmbiguousMatch — we match by name to avoid depending on
-    the selector agent's public exception shape during merge) returns None.
-    """
+    """Accept an id or a name. Delegates to `selectors.resolve`."""
     try:
         return await resolve(query, type=type, profile=profile)
-    except LookupError:
+    except (NotFound, AmbiguousMatch, LookupError):
         return None
-    except Exception as exc:  # noqa: BLE001
-        if exc.__class__.__name__ in {"NotFound", "AmbiguousMatch"}:
-            return None
-        raise
 
 
 async def _get_json(
     path: str, *, profile: str, api_version: str = "v1.0"
 ) -> dict[str, Any] | None:
-    resp = await graph_request("GET", path, profile=profile, api_version=api_version)
+    try:
+        resp = await graph_request("GET", path, profile=profile, api_version=api_version)
+    except GraphTransportError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
     if resp.status_code == 404:
         return None
-    if resp.status_code >= 400:
-        raise RuntimeError(f"graph {resp.status_code}: {resp.body}")
     body = resp.body
     return body if isinstance(body, dict) else None
 
@@ -63,8 +59,6 @@ def _not_found(entity: str, query: str, trace_id: str) -> Envelope:
 
 def _run(coro) -> Envelope:
     """Run an async show helper; convert transport auth errors to envelopes."""
-    from graphconnect.transport import GraphTransportError
-
     try:
         return asyncio.run(coro)
     except GraphTransportError as exc:
@@ -112,14 +106,66 @@ def _pol_assignments_path(kind: str | None, policy_id: str) -> str:
 
 def _pol_status_path(kind: str | None, policy_id: str) -> str | None:
     match kind:
-        case "settingsCatalog":
-            return f"/deviceManagement/configurationPolicies/{policy_id}/deviceStatuses"
         case "configurationProfile":
             return f"/deviceManagement/deviceConfigurations/{policy_id}/deviceStatuses"
         case "compliance":
             return f"/deviceManagement/deviceCompliancePolicies/{policy_id}/deviceStatuses"
         case _:
             return None
+
+
+def _schema_values_to_rows(body: Any) -> list[dict[str, Any]] | None:
+    """Convert Intune's `{Schema, Values}` report shape to dict rows, or None if body isn't that shape."""
+    if not isinstance(body, dict):
+        return None
+    schema = body.get("Schema") or body.get("schema")
+    values = body.get("Values") or body.get("values")
+    if not (isinstance(schema, list) and isinstance(values, list)):
+        return None
+    columns = [column.get("Column") for column in schema if isinstance(column, dict)]
+    rows: list[dict[str, Any]] = []
+    for raw_row in values:
+        if not isinstance(raw_row, list):
+            continue
+        rows.append({
+            str(columns[index]): raw_row[index]
+            for index in range(min(len(columns), len(raw_row)))
+            if columns[index]
+        })
+    return rows
+
+
+def _decorate_policy_status(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        if "PolicyStatus" in row and "Status" not in row:
+            row["Status"] = _POLICY_SETTING_STATUS_BY_CODE.get(row["PolicyStatus"], row["PolicyStatus"])
+
+
+async def _get_policy_status_items(
+    *,
+    kind: str | None,
+    policy_id: str,
+    profile: str,
+) -> list[dict[str, Any]]:
+    if kind == "settingsCatalog":
+        entry = get_entry("policies.settings_catalog_device_status")
+        if entry is None or not entry.body_template:
+            return []
+        resp = await graph_request(
+            entry.method or "POST",
+            entry.endpoint,
+            profile=profile,
+            api_version=entry.api_version.value,
+            body=_render_template_value(entry.body_template, {"policy_id": policy_id}),
+        )
+        rows = _schema_values_to_rows(resp.body) or value_list(resp.body)
+        _decorate_policy_status(rows)
+        return rows
+
+    status_path = _pol_status_path(kind, policy_id)
+    if status_path is None:
+        return []
+    return value_list(await _get_json(status_path, profile=profile))
 
 
 # --- subcommands ------------------------------------------------------------
@@ -160,18 +206,18 @@ async def _show_device_async(
 
     data: list[dict[str, Any]] = [{"entity": "device", **device}]
     if include_apps:
-        data.append({"entity": "detectedApps", "items": _unwrap_value(results["apps"])})
+        data.append({"entity": "detectedApps", "items": value_list(results["apps"])})
     if include_compliance:
-        data.append({"entity": "compliance", "items": _unwrap_value(results["compliance"])})
+        data.append({"entity": "compliance", "items": value_list(results["compliance"])})
 
+    next_actions = [f"explain noncompliance --device {loc.id}"]
+    if upn := device.get("userPrincipalName"):
+        next_actions.append(f"show user {upn}")
     return Envelope.ok_read(
         summary=f"device {loc.display_name or loc.id}",
         data=data,
         trace_id=trace_id,
-        next_actions=[
-            f"explain device-compliance --device-id {loc.id}",
-            f"show user {device.get('userPrincipalName')}" if device.get("userPrincipalName") else "",
-        ],
+        next_actions=next_actions,
     )
 
 
@@ -210,17 +256,17 @@ async def _show_user_async(
 
     data: list[dict[str, Any]] = [{"entity": "user", **user}]
     if include_licenses:
-        data.append({"entity": "licenses", "items": _unwrap_value(results["licenses"])})
+        data.append({"entity": "licenses", "items": value_list(results["licenses"])})
     if include_groups:
-        data.append({"entity": "groups", "items": _unwrap_value(results["groups"])})
+        data.append({"entity": "groups", "items": value_list(results["groups"])})
 
     return Envelope.ok_read(
         summary=f"user {loc.upn or loc.display_name or loc.id}",
         data=data,
         trace_id=trace_id,
         next_actions=[
-            f"show device --user-id {loc.id}",
-            f"hunt signins --user-id {loc.id}",
+            f"show user {loc.id} --include-groups",
+            f"show user {loc.id} --include-licenses",
         ],
     )
 
@@ -264,16 +310,16 @@ async def _show_group_async(
 
     data: list[dict[str, Any]] = [{"entity": "group", **group}]
     if include_members:
-        data.append({"entity": "members", "items": _unwrap_value(results["members"])})
+        data.append({"entity": "members", "items": value_list(results["members"])})
     if include_assignments:
-        data.append({"entity": "assignments", "items": _unwrap_value(results["assignments"])})
+        data.append({"entity": "assignments", "items": value_list(results["assignments"])})
 
     return Envelope.ok_read(
         summary=f"group {loc.display_name or loc.id}",
         data=data,
         trace_id=trace_id,
         next_actions=[
-            f"hunt assignment-drift --group-id {loc.id}",
+            f"show group {loc.id} --include-members",
         ],
     )
 
@@ -304,9 +350,7 @@ async def _show_policy_async(
     if include_assignments and kind != "conditionalAccess":
         tasks["assignments"] = _get_json(_pol_assignments_path(kind, loc.id), profile=profile)
     if include_status:
-        status_path = _pol_status_path(kind, loc.id)
-        if status_path is not None:
-            tasks["status"] = _get_json(status_path, profile=profile)
+        tasks["status"] = _get_policy_status_items(kind=kind, policy_id=loc.id, profile=profile)
 
     results = dict(zip(tasks.keys(), await asyncio.gather(*tasks.values()), strict=True))
     policy = results.get("policy")
@@ -315,16 +359,17 @@ async def _show_policy_async(
 
     data: list[dict[str, Any]] = [{"entity": "policy", "kind": kind, **policy}]
     if "assignments" in results:
-        data.append({"entity": "assignments", "items": _unwrap_value(results["assignments"])})
+        data.append({"entity": "assignments", "items": value_list(results["assignments"])})
     if "status" in results:
-        data.append({"entity": "status", "items": _unwrap_value(results["status"])})
+        data.append({"entity": "status", "items": results["status"]})
 
     return Envelope.ok_read(
         summary=f"policy {loc.display_name or loc.id}",
         data=data,
         trace_id=trace_id,
         next_actions=[
-            f"explain policy-failure --policy-id {loc.id}",
+            f"show policy {loc.id} --include-assignments",
+            f"explain assignment-drift --policy {loc.id}",
         ],
     )
 
@@ -340,8 +385,7 @@ def show_assignment(
 
 async def _show_assignment_async(id: str, *, profile: str) -> Envelope:
     trace_id = _new_trace_id()
-    # Assignment ids in Intune are composite: <policy-id>_<group-id>. We try the
-    # settings-catalog endpoint first since it's the dominant modern shape.
+    # Assignment ids in Intune are composite: <policy-id>_<group-id>.
     if "_" not in id:
         return Envelope.err(
             summary=f"assignment id '{id}' is malformed",
@@ -353,29 +397,24 @@ async def _show_assignment_async(id: str, *, profile: str) -> Envelope:
         )
     policy_id, _, _ = id.partition("_")
 
-    for path in (
+    paths = (
         f"/deviceManagement/configurationPolicies/{policy_id}/assignments/{id}",
         f"/deviceManagement/deviceConfigurations/{policy_id}/assignments/{id}",
         f"/deviceManagement/deviceCompliancePolicies/{policy_id}/assignments/{id}",
-    ):
-        record = await _get_json(path, profile=profile)
+    )
+    for path in paths:
+        try:
+            record = await _get_json(path, profile=profile)
+        except GraphTransportError:
+            continue
         if record is not None:
             return Envelope.ok_read(
                 summary=f"assignment {id}",
                 data=[{"entity": "assignment", **record}],
                 trace_id=trace_id,
-                next_actions=[f"show policy {policy_id}"],
+                next_actions=[f"show policy {policy_id} --include-assignments"],
             )
     return _not_found("Assignment", id, trace_id)
-
-
-def _unwrap_value(body: dict[str, Any] | None) -> list[Any]:
-    """Graph collection responses wrap rows in `value`."""
-    if body is None:
-        return []
-    if isinstance(body, dict) and "value" in body and isinstance(body["value"], list):
-        return body["value"]
-    return [body] if isinstance(body, dict) else []
 
 
 # --- registration -----------------------------------------------------------

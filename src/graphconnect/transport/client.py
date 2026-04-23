@@ -6,29 +6,16 @@ import asyncio
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from .consistency import apply_advanced_query, needs_advanced_query
 from .national_cloud import get_endpoint_base
-from .pagination import paginate
+from .pagination import paginate as _paginate
 from .throttle import ThrottleState, sleep_for_retry
-
-try:  # pragma: no cover - auth is owned by another agent
-    from graphconnect.auth import get_credential  # type: ignore
-except Exception:  # pragma: no cover
-    async def get_credential(profile: str = "default"):  # type: ignore
-        # TODO(merge): replace with real impl from auth-builder
-        class _StubCredential:
-            async def get_token(self, *scopes: str):
-                class _T:
-                    token = "STUB"
-                    expires_on = int(time.time()) + 3600
-                return _T()
-        return _StubCredential()
 
 
 class DeadlineExceeded(TimeoutError):
@@ -52,9 +39,6 @@ class GraphResponse:
     attempts: int = 1
     throttle_wait_s: float = 0.0
     pages: int = 1
-
-
-_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 
 
 def _split_path(path: str) -> tuple[str, dict[str, str]]:
@@ -85,18 +69,61 @@ def _compose_url(
     )
 
 
-async def _acquire_token(profile: str) -> str:
-    cred = get_credential(profile)
-    if asyncio.iscoroutine(cred):
-        cred = await cred
+def _resolve_auth_context(profile: str) -> Any:
+    from graphconnect.auth import get_auth_context
+
+    return get_auth_context(profile=profile)
+
+
+async def _acquire_token(context: Any, profile: str) -> str:
+    cred = getattr(context, "credential", None)
     if cred is None:
         raise GraphTransportError(
             f"no credential configured for profile '{profile}' — run `graphconnect auth login`"
         )
-    token_obj = cred.get_token(_DEFAULT_SCOPE)
+    scopes = list(getattr(context, "scopes", []) or ["https://graph.microsoft.com/.default"])
+    token_obj = cred.get_token(*scopes)
     if asyncio.iscoroutine(token_obj):
         token_obj = await token_obj
     return getattr(token_obj, "token", "STUB")
+
+
+def _coerce_header_map(headers: Any) -> dict[str, str]:
+    if not isinstance(headers, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in headers.items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            out[str(key)] = ",".join(str(item) for item in value)
+        else:
+            out[str(key)] = str(value)
+    return out
+
+
+def _unwrap_powershell_response(
+    response: Any,
+    *,
+    default_status: int,
+) -> tuple[Any, int, dict[str, str]]:
+    if isinstance(response, dict) and "body" in response:
+        return (
+            response.get("body"),
+            int(response.get("status_code") or default_status),
+            _coerce_header_map(response.get("headers") or {}),
+        )
+    return response, default_status, {}
+
+
+def _retry_response(status_code: int, headers: dict[str, str], body: Any) -> httpx.Response:
+    content = b""
+    if body is not None:
+        if isinstance(body, (dict, list)):
+            content = json.dumps(body, default=str).encode("utf-8")
+        else:
+            content = str(body).encode("utf-8")
+    return httpx.Response(status_code=status_code, headers=headers, content=content)
 
 
 _http_client_ref: dict[str, httpx.AsyncClient] = {}
@@ -116,6 +143,189 @@ def _get_http_client() -> httpx.AsyncClient:
         client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
         _http_client_ref["client"] = client
     return client
+
+
+@dataclass
+class _Exchange:
+    body: Any
+    status_code: int
+    headers: dict[str, str]
+
+
+_Sender = Callable[[str, str, "dict | bytes | None", dict[str, str], float], Awaitable[_Exchange]]
+
+
+async def _send_httpx(
+    method: str,
+    url: str,
+    body: dict | bytes | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _Exchange:
+    if isinstance(body, bytes):
+        content: bytes | None = body
+    elif isinstance(body, dict):
+        content = json.dumps(body).encode("utf-8")
+    else:
+        content = None
+    response = await asyncio.wait_for(
+        _get_http_client().request(method, url, headers=headers, content=content),
+        timeout=timeout,
+    )
+    return _Exchange(
+        body=_safe_json(response),
+        status_code=response.status_code,
+        headers=dict(response.headers),
+    )
+
+
+async def _send_powershell(
+    method: str,
+    url: str,
+    body: dict | bytes | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _Exchange:
+    from graphconnect.auth import invoke_graph_powershell_request
+
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            invoke_graph_powershell_request,
+            method=method,
+            url=url,
+            body=body if isinstance(body, dict) else None,
+            headers=headers,
+        ),
+        timeout=timeout,
+    )
+    body_out, status_code, headers_out = _unwrap_powershell_response(response, default_status=200)
+    return _Exchange(body=body_out, status_code=status_code, headers=headers_out)
+
+
+async def _run_request_loop(
+    *,
+    send: _Sender,
+    method: str,
+    url: str,
+    body: dict | bytes | None,
+    headers: dict[str, str],
+    deadline: float,
+    deadline_s: float,
+    paginate: bool,
+    top: int | None,
+    max_items: int | None,
+    trace_id: str,
+) -> GraphResponse:
+    state = ThrottleState()
+    attempt = 0
+    while True:
+        attempt += 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DeadlineExceeded(
+                f"deadline of {deadline_s:.1f}s exceeded after {attempt - 1} attempts"
+            )
+        try:
+            exchange = await send(method, url, body, headers, remaining)
+        except asyncio.TimeoutError as exc:
+            raise DeadlineExceeded(
+                f"deadline of {deadline_s:.1f}s exceeded during request"
+            ) from exc
+
+        if exchange.status_code in (429, 503):
+            wait_s = await sleep_for_retry(
+                _retry_response(exchange.status_code, exchange.headers, exchange.body),
+                attempt,
+            )
+            if wait_s is None:
+                raise GraphTransportError(
+                    f"throttled (status {exchange.status_code}); exhausted {attempt} attempts",
+                    status_code=exchange.status_code,
+                    body=exchange.body,
+                )
+            remaining = deadline - time.monotonic()
+            if wait_s >= remaining:
+                raise DeadlineExceeded(
+                    f"retry wait {wait_s:.2f}s exceeds remaining deadline {remaining:.2f}s"
+                )
+            state.record(wait_s)
+            await asyncio.sleep(wait_s)
+            continue
+        break
+
+    parsed = exchange.body
+    pages = 1
+    if paginate and isinstance(parsed, dict) and parsed.get("@odata.nextLink"):
+
+        async def fetch_next(next_url: str) -> dict[str, Any]:
+            nonlocal pages
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DeadlineExceeded("deadline exceeded during pagination")
+            try:
+                ex = await send("GET", next_url, None, headers, remaining)
+            except asyncio.TimeoutError as exc:
+                raise DeadlineExceeded("deadline exceeded during pagination") from exc
+            if ex.status_code >= 400:
+                raise GraphTransportError(
+                    f"Graph returned {ex.status_code}",
+                    status_code=ex.status_code,
+                    body=ex.body,
+                )
+            pages += 1
+            return ex.body if isinstance(ex.body, dict) else {}
+
+        items = await _paginate(parsed, request_fn=fetch_next, top=top, max_items=max_items)
+        parsed = dict(parsed)
+        parsed["value"] = items
+        parsed.pop("@odata.nextLink", None)
+
+    if exchange.status_code >= 400:
+        raise GraphTransportError(
+            f"Graph returned {exchange.status_code}",
+            status_code=exchange.status_code,
+            body=parsed,
+        )
+
+    request_id = exchange.headers.get("request-id") or exchange.headers.get("x-ms-request-id") or ""
+    return GraphResponse(
+        status_code=exchange.status_code,
+        headers=exchange.headers,
+        body=parsed,
+        request_id=request_id,
+        trace_id=trace_id,
+        attempts=attempt,
+        throttle_wait_s=state.total_wait_s,
+        pages=pages,
+    )
+
+
+async def _graph_request_via_powershell(
+    method: str,
+    url: str,
+    *,
+    body: dict | bytes | None,
+    headers: dict[str, str],
+    deadline_s: float,
+    deadline: float,
+    paginate: bool,
+    top: int | None,
+    max_items: int | None,
+    trace_id: str,
+) -> GraphResponse:
+    return await _run_request_loop(
+        send=_send_powershell,
+        method=method,
+        url=url,
+        body=body,
+        headers=headers,
+        deadline=deadline,
+        deadline_s=deadline_s,
+        paginate=paginate,
+        top=top,
+        max_items=max_items,
+        trace_id=trace_id,
+    )
 
 
 async def graph_request(
@@ -145,109 +355,43 @@ async def graph_request(
     if needs_advanced_query(cleaned_path, query):
         headers, query = apply_advanced_query(headers, query)
 
-    token = await _acquire_token(profile)
-    headers.setdefault("Authorization", f"Bearer {token}")
     headers.setdefault("client-request-id", trace_id)
     headers.setdefault("Accept", "application/json")
-
-    payload_bytes: bytes | None = None
-    if body is not None:
-        if isinstance(body, bytes):
-            payload_bytes = body
-        else:
-            payload_bytes = json.dumps(body).encode("utf-8")
-            headers.setdefault("Content-Type", "application/json")
+    if isinstance(body, dict):
+        headers.setdefault("Content-Type", "application/json")
 
     url = _compose_url(base, api_version, cleaned_path, query)
+    context = _resolve_auth_context(profile)
 
-    state = ThrottleState()
-    attempt = 0
-    client = _get_http_client()
-
-    while True:
-        attempt += 1
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise DeadlineExceeded(
-                f"deadline of {deadline_s:.1f}s exceeded after {attempt - 1} attempts"
-            )
-        try:
-            response = await asyncio.wait_for(
-                client.request(
-                    method,
-                    url,
-                    headers=headers,
-                    content=payload_bytes,
-                ),
-                timeout=remaining,
-            )
-        except asyncio.TimeoutError as exc:
-            raise DeadlineExceeded(
-                f"deadline of {deadline_s:.1f}s exceeded during request"
-            ) from exc
-
-        if response.status_code in (429, 503):
-            wait_s = await sleep_for_retry(response, attempt)
-            if wait_s is None:
-                raise GraphTransportError(
-                    f"throttled (status {response.status_code}); exhausted {attempt} attempts",
-                    status_code=response.status_code,
-                    body=_safe_json(response),
-                )
-            remaining = deadline - time.monotonic()
-            if wait_s >= remaining:
-                raise DeadlineExceeded(
-                    f"retry wait {wait_s:.2f}s exceeds remaining deadline {remaining:.2f}s"
-                )
-            state.record(wait_s)
-            await asyncio.sleep(wait_s)
-            continue
-        break
-
-    parsed = _safe_json(response)
-    request_id = response.headers.get("request-id") or response.headers.get("x-ms-request-id") or ""
-
-    pages = 1
-    if paginate and isinstance(parsed, dict) and parsed.get("@odata.nextLink"):
-        async def fetch_next(next_url: str) -> dict[str, Any]:
-            nonlocal pages
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise DeadlineExceeded("deadline exceeded during pagination")
-            resp = await asyncio.wait_for(
-                client.request("GET", next_url, headers=headers),
-                timeout=remaining,
-            )
-            pages += 1
-            return _safe_json(resp) or {}
-
-        from .pagination import paginate as _paginate
-        items = await _paginate(
-            parsed,
-            request_fn=fetch_next,
+    if getattr(context, "credential", None) is None:
+        return await _graph_request_via_powershell(
+            method,
+            url,
+            body=body,
+            headers=headers,
+            deadline_s=deadline_s,
+            deadline=deadline,
+            paginate=paginate,
             top=top,
             max_items=max_items,
-        )
-        parsed = dict(parsed)
-        parsed["value"] = items
-        parsed.pop("@odata.nextLink", None)
-
-    if response.status_code >= 400:
-        raise GraphTransportError(
-            f"Graph returned {response.status_code}",
-            status_code=response.status_code,
-            body=parsed,
+            trace_id=trace_id,
         )
 
-    return GraphResponse(
-        status_code=response.status_code,
-        headers=dict(response.headers),
-        body=parsed,
-        request_id=request_id,
+    token = await _acquire_token(context, profile)
+    headers.setdefault("Authorization", f"Bearer {token}")
+
+    return await _run_request_loop(
+        send=_send_httpx,
+        method=method,
+        url=url,
+        body=body,
+        headers=headers,
+        deadline=deadline,
+        deadline_s=deadline_s,
+        paginate=paginate,
+        top=top,
+        max_items=max_items,
         trace_id=trace_id,
-        attempts=attempt,
-        throttle_wait_s=state.total_wait_s,
-        pages=pages,
     )
 
 

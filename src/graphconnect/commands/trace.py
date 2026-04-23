@@ -1,11 +1,13 @@
-"""`trace` verb — read historical audit records and render step history."""
+"""`trace` verb — read historical audit records and render step history.
+
+stdout is plain JSON (no envelope chatter) so records can be piped through `jq`.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import typer
@@ -29,21 +31,26 @@ def _parse_since(value: str | None) -> datetime | None:
     if value is None:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except ValueError as exc:
         raise typer.BadParameter(f"invalid ISO-8601 timestamp: {value!r}") from exc
 
 
-def _step_from_record(rec: AuditRecord, seq: int, *, raw: bool) -> dict[str, Any]:
-    step: dict[str, Any] = {
-        "seq": seq,
+def _base_audit_row(rec: AuditRecord) -> dict[str, Any]:
+    return {
         "timestamp": rec.timestamp.isoformat(),
         "verb": rec.verb or rec.operation_id,
         "method": rec.method,
         "path": rec.graph_url,
         "status": rec.http_status if rec.http_status is not None else rec.status,
-        "duration_ms": rec.execution_time_ms,
     }
+
+
+def _step_from_record(rec: AuditRecord, seq: int, *, raw: bool) -> dict[str, Any]:
+    step: dict[str, Any] = {"seq": seq, **_base_audit_row(rec), "duration_ms": rec.execution_time_ms}
     if rec.error:
         step["error"] = rec.error
     if raw and rec.http_requests is not None:
@@ -54,11 +61,7 @@ def _step_from_record(rec: AuditRecord, seq: int, *, raw: bool) -> dict[str, Any
 def _summary_from_record(rec: AuditRecord) -> dict[str, Any]:
     return {
         "trace_id": rec.trace_id,
-        "timestamp": rec.timestamp.isoformat(),
-        "verb": rec.verb or rec.operation_id,
-        "method": rec.method,
-        "path": rec.graph_url,
-        "status": rec.http_status if rec.http_status is not None else rec.status,
+        **_base_audit_row(rec),
         "ok": rec.ok if rec.ok is not None else (rec.status == "success" and not rec.error),
         "error": rec.error,
     }

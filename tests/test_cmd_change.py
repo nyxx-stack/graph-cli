@@ -8,14 +8,17 @@ import pytest
 
 from graphconnect.commands import change as change_mod
 from graphconnect.commands.change import (
+    _assign_async,
     _account_async,
     _sync_async,
+    _unassign_async,
     _wipe_async,
     register,
 )
 from graphconnect.selectors import Locator
 from graphconnect.types import (
     CliError,
+    Envelope,
     ErrorCode,
     ErrorPayload,
     SafetyTier,
@@ -385,6 +388,95 @@ def test_breakglass_on_non_emergency_safe_entry_refused(monkeypatch: pytest.Monk
     assert env.error is not None
     assert env.error.code == ErrorCode.PERMISSION_DENIED
     assert "emergency_safe" in env.error.message
+
+
+def test_assign_uses_settings_catalog_assignment_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    _silence_audit(monkeypatch)
+
+    async def fake_resolve_or_transport_err(query: str, *, type: str, profile: str, trace_id: str):
+        del query, profile, trace_id
+        return Locator(type="policy", id="pol-1", display_name="Policy 1", kind="settingsCatalog"), None
+
+    async def fake_resolve_or_literal(query: str, *, type: str, profile: str, trace_id: str):
+        del query, profile, trace_id
+        if type == "group":
+            return "grp-1", None
+        return None, None
+
+    captured: dict[str, Any] = {}
+
+    async def fake_dispatch(entry_id, parameters, body, **kwargs):
+        captured["entry_id"] = entry_id
+        captured["parameters"] = parameters
+        captured["apply_command"] = kwargs.get("apply_command")
+        return Envelope.ok_plan("ok", {"token": "tok"}, trace_id="trace-1")
+
+    monkeypatch.setattr(change_mod, "_resolve_or_transport_err", fake_resolve_or_transport_err)
+    monkeypatch.setattr(change_mod, "_resolve_or_literal", fake_resolve_or_literal)
+    monkeypatch.setattr(change_mod, "_dispatch", fake_dispatch)
+
+    env = asyncio.run(
+        _assign_async(
+            policy="Policy 1",
+            to="Pilot Ring",
+            plan_flag=True,
+            apply_flag=False,
+            token=None,
+            profile="default",
+        )
+    )
+
+    assert env.ok is True
+    assert captured["entry_id"] == "policies.create_settings_catalog_assignment"
+    assert captured["parameters"] == {"policy_id": "pol-1", "group_id": "grp-1"}
+    assert "--policy 'Policy 1'" in captured["apply_command"]
+    assert "--to 'Pilot Ring'" in captured["apply_command"]
+
+
+def test_unassign_looks_up_real_assignment_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    _silence_audit(monkeypatch)
+
+    async def fake_resolve_or_transport_err(query: str, *, type: str, profile: str, trace_id: str):
+        del query, profile, trace_id
+        return Locator(type="policy", id="pol-1", display_name="Policy 1", kind="settingsCatalog"), None
+
+    async def fake_resolve_or_literal(query: str, *, type: str, profile: str, trace_id: str):
+        del query, profile, trace_id
+        if type == "group":
+            return "grp-1", None
+        return None, None
+
+    async def fake_find_assignment_id_for_group(**kwargs):
+        assert kwargs["policy_id"] == "pol-1"
+        assert kwargs["group_id"] == "grp-1"
+        return "assign-123", None
+
+    captured: dict[str, Any] = {}
+
+    async def fake_dispatch(entry_id, parameters, body, **kwargs):
+        captured["entry_id"] = entry_id
+        captured["parameters"] = parameters
+        return Envelope.ok_plan("ok", {"token": "tok"}, trace_id="trace-1")
+
+    monkeypatch.setattr(change_mod, "_resolve_or_transport_err", fake_resolve_or_transport_err)
+    monkeypatch.setattr(change_mod, "_resolve_or_literal", fake_resolve_or_literal)
+    monkeypatch.setattr(change_mod, "_find_assignment_id_for_group", fake_find_assignment_id_for_group)
+    monkeypatch.setattr(change_mod, "_dispatch", fake_dispatch)
+
+    env = asyncio.run(
+        _unassign_async(
+            policy="Policy 1",
+            from_="Pilot Ring",
+            plan_flag=True,
+            apply_flag=False,
+            token=None,
+            profile="default",
+        )
+    )
+
+    assert env.ok is True
+    assert captured["entry_id"] == "policies.delete_settings_catalog_assignment"
+    assert captured["parameters"] == {"policy_id": "pol-1", "assignment_id": "assign-123"}
 
 
 # --- registration -----------------------------------------------------------

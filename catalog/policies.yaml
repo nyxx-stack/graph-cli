@@ -922,9 +922,139 @@ operations:
     body_template:
       "@odata.type": "#microsoft.graph.deviceConfigurationAssignment"
       target:
-        "@odata.type": "microsoft.graph.groupAssignmentTarget"
+        "@odata.type": "#microsoft.graph.groupAssignmentTarget"
         groupId: "{group_id}"
     tags: ["configuration", "profile", "assignment", "create", "intune", "classic"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.create_settings_catalog_assignment"
+    aliases: ["policies.settings_catalog_assignment_create", "policies.add_settings_catalog_assignment"]
+    rate_limit_class: "standard"
+    summary: "Create a direct group assignment on a Settings Catalog policy"
+    description: >
+      Creates a single assignment object under
+      /deviceManagement/configurationPolicies/{policy_id}/assignments using a
+      groupAssignmentTarget.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}/assignments"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target Entra group ID"
+    body_template:
+      target:
+        "@odata.type": "#microsoft.graph.groupAssignmentTarget"
+        groupId: "{group_id}"
+    tags: ["settings-catalog", "assignment", "create", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.delete_settings_catalog_assignment"
+    aliases: ["policies.settings_catalog_assignment_delete", "policies.remove_settings_catalog_assignment"]
+    rate_limit_class: "standard"
+    summary: "Delete a direct assignment from a Settings Catalog policy"
+    description: >
+      Deletes a specific assignment object from
+      /deviceManagement/configurationPolicies/{policy_id}/assignments/{assignment_id}.
+    domain: "policies"
+    safety_tier: "write"
+    method: "DELETE"
+    endpoint: "/deviceManagement/configurationPolicies/{policy_id}/assignments/{assignment_id}"
+    preview_lookup_endpoint: "/deviceManagement/configurationPolicies/{policy_id}"
+    preview_lookup_select: ["id", "name", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "name", "lastModifiedDateTime"]
+    api_version: "beta"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog policy ID"
+      - name: "assignment_id"
+        type: "string"
+        required: true
+        description: "Settings Catalog assignment ID"
+    tags: ["settings-catalog", "assignment", "delete", "intune", "modern"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.create_compliance_policy_assignment"
+    aliases: ["policies.compliance_policy_assignment_create", "policies.add_compliance_policy_assignment"]
+    rate_limit_class: "standard"
+    summary: "Create a direct group assignment on a compliance policy"
+    description: >
+      Creates a single assignment object under
+      /deviceManagement/deviceCompliancePolicies/{policy_id}/assignments using a
+      groupAssignmentTarget.
+    domain: "policies"
+    safety_tier: "write"
+    method: "POST"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/assignments"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 201
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Compliance policy ID"
+      - name: "group_id"
+        type: "string"
+        required: true
+        description: "Target Entra group ID"
+    body_template:
+      target:
+        "@odata.type": "#microsoft.graph.groupAssignmentTarget"
+        groupId: "{group_id}"
+    tags: ["compliance", "assignment", "create", "intune"]
+    cmmc_controls: ["CM.L2-3.4.2"]
+
+  - id: "policies.delete_compliance_policy_assignment"
+    aliases: ["policies.compliance_policy_assignment_delete", "policies.remove_compliance_policy_assignment"]
+    rate_limit_class: "standard"
+    summary: "Delete a direct assignment from a compliance policy"
+    description: >
+      Deletes a specific assignment object from
+      /deviceManagement/deviceCompliancePolicies/{policy_id}/assignments/{assignment_id}.
+    domain: "policies"
+    safety_tier: "write"
+    method: "DELETE"
+    endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}/assignments/{assignment_id}"
+    preview_lookup_endpoint: "/deviceManagement/deviceCompliancePolicies/{policy_id}"
+    preview_lookup_select: ["id", "displayName", "lastModifiedDateTime"]
+    execute_fingerprint_fields: ["id", "displayName", "lastModifiedDateTime"]
+    api_version: "v1.0"
+    expected_success_status: 204
+    graph_permissions:
+      - "DeviceManagementConfiguration.ReadWrite.All"
+    parameters:
+      - name: "policy_id"
+        type: "string"
+        required: true
+        description: "Compliance policy ID"
+      - name: "assignment_id"
+        type: "string"
+        required: true
+        description: "Compliance assignment ID"
+    tags: ["compliance", "assignment", "delete", "intune"]
     cmmc_controls: ["CM.L2-3.4.2"]
 
   - id: "policies.delete_config_profile_assignment"

@@ -7,6 +7,7 @@ applied* device set reported by Intune. Emits one row per drifted device with a
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -109,33 +110,41 @@ async def run(
         policy_id=policy_id, policy_name=policy_name, profile=profile, lookup=lookup
     )
 
-    assignments = await _fetch_assignments(policy=policy, profile=profile)
+    assignments, applied = await asyncio.gather(
+        _fetch_assignments(policy=policy, profile=profile),
+        _fetch_applied_devices(policy=policy, profile=profile),
+    )
 
     declared: set[str] = set()
     excluded: set[str] = set()
     declared_groups: list[str] = []
     excluded_groups: list[str] = []
 
+    expand_tasks: list[tuple[str, str]] = []  # (kind, gid)
     for a in assignments:
         target = a.get("target") or {}
         kind = _target_kind(target)
         gid = _group_id_from_target(target)
-        if kind == "exclude" and gid:
-            ids, _ = await _expand_group(
-                group_id=gid, profile=profile, include_groups=include_groups
-            )
-            excluded |= ids
-            excluded_groups.append(gid)
-        elif kind == "include" and gid:
-            ids, _ = await _expand_group(
-                group_id=gid, profile=profile, include_groups=include_groups
-            )
-            declared |= ids
-            declared_groups.append(gid)
+        if kind in ("include", "exclude") and gid:
+            expand_tasks.append((kind, gid))
+            if kind == "include":
+                declared_groups.append(gid)
+            else:
+                excluded_groups.append(gid)
         elif kind == "all_devices":
             declared_groups.append("allDevices")
 
-    applied = await _fetch_applied_devices(policy=policy, profile=profile)
+    expanded = await asyncio.gather(
+        *(
+            _expand_group(group_id=gid, profile=profile, include_groups=include_groups)
+            for _, gid in expand_tasks
+        )
+    )
+    for (kind, _), (ids, _members) in zip(expand_tasks, expanded, strict=True):
+        if kind == "include":
+            declared |= ids
+        else:
+            excluded |= ids
 
     effective = declared - excluded
     unassigned = effective - applied

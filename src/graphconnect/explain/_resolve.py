@@ -9,6 +9,7 @@ TODO(merge): replace with graphconnect.selectors.resolve() when selector agent l
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ._transport import _values, graph_get
@@ -38,20 +39,20 @@ def _pick_named(
 
 
 async def list_policy_lookup(*, profile: str) -> dict[str, dict[str, Any]]:
-    settings = _values(
-        await graph_get(
+    settings_body, classic_body = await asyncio.gather(
+        graph_get(
             "/deviceManagement/configurationPolicies?$select=id,name",
             profile=profile,
             api_version="beta",
-        )
-    )
-    classic = _values(
-        await graph_get(
+        ),
+        graph_get(
             "/deviceManagement/deviceConfigurations?$select=id,displayName",
             profile=profile,
             api_version="v1.0",
-        )
+        ),
     )
+    settings = _values(settings_body)
+    classic = _values(classic_body)
     out: dict[str, dict[str, Any]] = {}
     for row in settings:
         pid = row.get("id")

@@ -7,6 +7,7 @@ the operator can jump to the right remediation.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -124,11 +125,9 @@ async def run(
     if not user and not device:
         raise ValueError("Provide --user or --device.")
 
-    directory = await _fetch_directory_audits(
-        upn=user, device_id=device, profile=profile
-    )
-    registration = await _fetch_registration_requests(
-        upn=user, device_id=device, profile=profile
+    directory, registration = await asyncio.gather(
+        _fetch_directory_audits(upn=user, device_id=device, profile=profile),
+        _fetch_registration_requests(upn=user, device_id=device, profile=profile),
     )
 
     rows: list[dict[str, Any]] = []

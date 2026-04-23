@@ -4,82 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import secrets
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import typer
 
 from graphconnect.output import emit
-
-try:  # pragma: no cover - transport is owned by another agent
-    from graphconnect.transport import graph_request  # type: ignore
-except Exception:  # pragma: no cover
-    # TODO(merge): replace with real impl from transport agent
-    async def graph_request(*args: Any, **kwargs: Any):  # type: ignore
-        raise RuntimeError("transport stub: graph_request not available")
-
-try:
-    from graphconnect.types import Envelope, ErrorCode, ErrorPayload
-except Exception:  # pragma: no cover
-    # TODO(merge): replace with real impl from envelope agent
-    from pydantic import BaseModel, Field
-
-    class ErrorCode(str):  # type: ignore
-        USAGE_ERROR = "usage_error"
-        BAD_REQUEST = "bad_request"
-        TOKEN_INVALID = "token_invalid"
-        UPSTREAM_ERROR = "upstream_error"
-
-    class ErrorPayload(BaseModel):  # type: ignore
-        code: str
-        message: str
-        hint: str | None = None
-
-    class Envelope(BaseModel):  # type: ignore
-        ok: bool
-        trace_id: str
-        mode: str
-        summary: str
-        data: list[dict[str, Any]] | None = None
-        plan: dict[str, Any] | None = None
-        warnings: list[str] = Field(default_factory=list)
-        next_actions: list[str] = Field(default_factory=list)
-        error: ErrorPayload | None = None
-
-        @classmethod
-        def ok_read(cls, summary, data, *, trace_id, warnings=None, next_actions=None):
-            return cls(ok=True, trace_id=trace_id, mode="read", summary=summary, data=data,
-                       warnings=warnings or [], next_actions=next_actions or [])
-
-        @classmethod
-        def ok_plan(cls, summary, plan, *, trace_id, warnings=None, next_actions=None):
-            return cls(ok=True, trace_id=trace_id, mode="plan", summary=summary, plan=plan,
-                       warnings=warnings or [], next_actions=next_actions or [])
-
-        @classmethod
-        def ok_apply(cls, summary, *, trace_id, data=None, plan=None,
-                     warnings=None, next_actions=None, breakglass=False):
-            return cls(ok=True, trace_id=trace_id, mode="apply", summary=summary,
-                       data=data, plan=plan, warnings=warnings or [],
-                       next_actions=next_actions or [])
-
-        @classmethod
-        def err(cls, summary, error, *, trace_id, mode="read", warnings=None, next_actions=None):
-            return cls(ok=False, trace_id=trace_id, mode=mode, summary=summary,
-                       warnings=warnings or [], next_actions=next_actions or [], error=error)
-
-
-try:  # pragma: no cover
-    from graphconnect.auth import get_credential  # type: ignore  # noqa: F401
-except Exception:  # pragma: no cover
-    async def get_credential(profile: str = "default"):  # type: ignore
-        # TODO(merge): replace with real impl from auth agent
-        return None
+from graphconnect.transport import graph_request
+from graphconnect.types import Envelope, ErrorCode, ErrorPayload
 
 
 # --- scope whitelist --------------------------------------------------------
@@ -130,39 +66,6 @@ _TOKEN_FILE = _TOKEN_DIR / "raw_plan_tokens.json"
 _TOKEN_TTL_S = 120
 
 
-def _try_mint_from_safety(plan: dict) -> str | None:
-    try:
-        from graphconnect import safety  # type: ignore
-    except Exception:
-        return None
-    mint = getattr(safety, "mint_token", None)
-    if not callable(mint):
-        return None
-    try:
-        tok = mint(plan)
-        return getattr(tok, "token", tok) if tok else None
-    except Exception:
-        return None
-
-
-def _try_validate_with_safety(token: str, plan: dict) -> bool | None:
-    try:
-        from graphconnect import safety  # type: ignore
-    except Exception:
-        return None
-    validator = getattr(safety, "validate_token", None)
-    if not callable(validator):
-        return None
-    try:
-        # If an upstream impl matching contract §7 exists, it will accept (token, plan).
-        return bool(validator(token, plan))
-    except TypeError:
-        # Signature mismatch with the legacy safety.validate_token: treat as no-op.
-        return None
-    except Exception:
-        return False
-
-
 def _load_tokens() -> dict[str, dict[str, Any]]:
     try:
         with open(_TOKEN_FILE, encoding="utf-8") as f:
@@ -178,15 +81,9 @@ def _save_tokens(tokens: dict[str, dict[str, Any]]) -> None:
 
 
 def _mint_plan_token(plan: dict[str, Any]) -> tuple[str, int]:
-    """Return (token, ttl_s). Prefer safety.mint_token when present."""
-    upstream = _try_mint_from_safety(plan)
-    if upstream:
-        return upstream, _TOKEN_TTL_S
-
     token = "raw_" + secrets.token_hex(16)
     expires_at = time.time() + _TOKEN_TTL_S
     tokens = _load_tokens()
-    # GC expired entries while we're here.
     now = time.time()
     tokens = {k: v for k, v in tokens.items() if v.get("expires_at", 0) > now}
     tokens[token] = {"plan": plan, "expires_at": expires_at}
@@ -195,10 +92,6 @@ def _mint_plan_token(plan: dict[str, Any]) -> tuple[str, int]:
 
 
 def _validate_plan_token(token: str, plan: dict[str, Any]) -> bool:
-    upstream = _try_validate_with_safety(token, plan)
-    if upstream is not None:
-        return upstream
-
     tokens = _load_tokens()
     entry = tokens.get(token)
     if not entry:
@@ -237,12 +130,20 @@ def _audit_record(
     error: str | None = None,
     body_redacted: bool = False,
 ) -> None:
+    status = "success" if ok else "error"
+    if mode == "plan" and ok:
+        status = "planned"
     record = {
         "trace_id": trace_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "operation_id": "raw",
         "verb": verb,
         "mode": mode,
         "profile": profile,
+        "method": method,
+        "graph_url": path,
+        "status": status,
+        "http_status": http_status,
         "args_redacted": {
             "method": method,
             "path": path,

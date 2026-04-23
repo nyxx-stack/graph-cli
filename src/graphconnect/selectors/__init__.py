@@ -11,6 +11,8 @@ from .resolvers import (
     find_groups,
     find_policies,
     find_users,
+    looks_like_guid,
+    value_list,
 )
 
 _ALL_TYPES: tuple[EntityType, ...] = ("device", "user", "group", "policy", "assignment")
@@ -98,5 +100,7 @@ __all__ = [
     "Locator",
     "NotFound",
     "find",
+    "looks_like_guid",
     "resolve",
+    "value_list",
 ]

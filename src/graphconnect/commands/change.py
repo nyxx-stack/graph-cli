@@ -11,9 +11,10 @@ audit record tagged `breakglass=true`.
 from __future__ import annotations
 
 import asyncio
+import shlex
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import typer
 
@@ -26,7 +27,9 @@ from graphconnect.selectors import (
     Locator,
     NotFound,
     resolve,
+    value_list,
 )
+from graphconnect.transport import GraphTransportError, graph_request
 from graphconnect.types import (
     CatalogEntry,
     CliError,
@@ -34,6 +37,7 @@ from graphconnect.types import (
     ErrorCode,
     ErrorPayload,
     SafetyTier,
+    WritePreview,
 )
 
 app = typer.Typer(
@@ -60,15 +64,13 @@ async def _resolve_id(query: str, *, type: str, profile: str) -> Locator | None:
 async def _resolve_or_transport_err(
     query: str, *, type: str, profile: str, trace_id: str
 ) -> tuple[Locator | None, Envelope | None]:
-    from graphconnect.transport import GraphTransportError
-
     try:
         loc = await _resolve_id(query, type=type, profile=profile)
     except GraphTransportError as exc:
         return None, Envelope.err(
             summary=f"{type} lookup failed: {exc}",
             error=ErrorPayload(
-                code=ErrorCode.AUTH_ERROR if hasattr(ErrorCode, "AUTH_ERROR") else ErrorCode.UPSTREAM_ERROR,
+                code=ErrorCode.UPSTREAM_ERROR,
                 message=str(exc),
                 hint="Run `graphconnect auth login --profile <name>` to configure credentials.",
             ),
@@ -95,7 +97,7 @@ def _err_envelope(
     )
 
 
-def _plan_dict(preview: Any, *, ttl_s: int) -> dict[str, Any]:
+def _plan_dict(preview: WritePreview, *, ttl_s: int) -> dict[str, Any]:
     return {
         "token": preview.confirm_token,
         "method": preview.method,
@@ -103,7 +105,7 @@ def _plan_dict(preview: Any, *, ttl_s: int) -> dict[str, Any]:
         "body": preview.body,
         "affected_resources": list(preview.affected_resources),
         "reversible": preview.reversible,
-        "reverse_operation": getattr(preview, "reverse_operation", None),
+        "reverse_operation": preview.reverse_operation,
         "ttl_s": ttl_s,
     }
 
@@ -114,6 +116,31 @@ def _ttl_seconds(entry: CatalogEntry, *, breakglass: bool) -> int:
     if entry.safety_tier == SafetyTier.DESTRUCTIVE:
         return 60
     return 120
+
+
+def _apply_command(
+    verb: str,
+    *,
+    profile: str,
+    positional: list[str] | None = None,
+    options: dict[str, str | None] | None = None,
+    breakglass: bool = False,
+    reason: str | None = None,
+) -> str:
+    """Render a `change <verb>` apply invocation with a `{token}` placeholder."""
+    parts: list[str] = ["change", verb]
+    if positional:
+        parts.extend(positional)
+    for key, value in (options or {}).items():
+        if not value:
+            continue
+        parts.extend([f"--{key}", value])
+    parts.extend(["--profile", profile, "--apply", "--token", "{token}"])
+    if breakglass:
+        parts.append("--breakglass")
+        if reason:
+            parts.extend(["--reason", reason])
+    return shlex.join(parts)
 
 
 def _validate_breakglass(
@@ -161,6 +188,7 @@ async def _run_plan(
     summary: str,
     breakglass: bool,
     reason: str | None,
+    apply_command: str | None,
 ) -> Envelope:
     bg_err = _validate_breakglass(
         entry, breakglass=breakglass, reason=reason, trace_id=trace_id, mode="plan"
@@ -199,7 +227,10 @@ async def _run_plan(
     plan = _plan_dict(preview, ttl_s=ttl_s)
 
     next_actions = [
-        f"change {verb} --apply --token {preview.confirm_token}",
+        (apply_command or f"change {verb} --apply --token {{token}}").replace(
+            "{token}",
+            preview.confirm_token,
+        ),
     ]
     return Envelope.ok_plan(
         summary=summary,
@@ -331,8 +362,9 @@ async def _dispatch(
     profile: str,
     verb: str,
     summary: str,
+    trace_id: str,
+    apply_command: str | None = None,
 ) -> Envelope:
-    trace_id = _new_trace_id()
     entry = get_entry(entry_id)
     if entry is None:
         return _err_envelope(
@@ -376,6 +408,7 @@ async def _dispatch(
         summary=summary,
         breakglass=breakglass,
         reason=reason,
+        apply_command=apply_command,
     )
 
 
@@ -403,6 +436,83 @@ def _mode_flags(plan: bool, apply: bool) -> tuple[bool, bool]:
     if not plan and not apply:
         return True, False
     return plan, apply
+
+
+class _AssignmentConfig(NamedTuple):
+    create_entry_id: str
+    delete_entry_id: str
+    base_path: str
+    api_version: str
+    id_param: str
+
+
+_ASSIGNMENT_CONFIG: dict[str, _AssignmentConfig] = {
+    "settingsCatalog": _AssignmentConfig(
+        create_entry_id="policies.create_settings_catalog_assignment",
+        delete_entry_id="policies.delete_settings_catalog_assignment",
+        base_path="/deviceManagement/configurationPolicies",
+        api_version="beta",
+        id_param="policy_id",
+    ),
+    "configurationProfile": _AssignmentConfig(
+        create_entry_id="policies.create_config_profile_assignment",
+        delete_entry_id="policies.delete_config_profile_assignment",
+        base_path="/deviceManagement/deviceConfigurations",
+        api_version="v1.0",
+        id_param="profile_id",
+    ),
+    "compliance": _AssignmentConfig(
+        create_entry_id="policies.create_compliance_policy_assignment",
+        delete_entry_id="policies.delete_compliance_policy_assignment",
+        base_path="/deviceManagement/deviceCompliancePolicies",
+        api_version="v1.0",
+        id_param="policy_id",
+    ),
+}
+
+
+def _assignment_config(kind: str | None) -> _AssignmentConfig | None:
+    return _ASSIGNMENT_CONFIG.get(kind or "")
+
+
+async def _find_assignment_id_for_group(
+    *,
+    policy_id: str,
+    config: _AssignmentConfig,
+    group_id: str,
+    profile: str,
+    trace_id: str,
+) -> tuple[str | None, Envelope | None]:
+    try:
+        response = await graph_request(
+            "GET",
+            f"{config.base_path}/{policy_id}/assignments?$select=id,target",
+            profile=profile,
+            api_version=config.api_version,  # type: ignore[arg-type]
+            paginate=True,
+        )
+    except GraphTransportError as exc:
+        return None, Envelope.err(
+            summary=f"assignment lookup failed: {exc}",
+            error=ErrorPayload(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=str(exc),
+                hint="Run `graphconnect auth login --profile <name>` to configure credentials.",
+            ),
+            trace_id=trace_id,
+        )
+
+    for row in value_list(response.body):
+        target = row.get("target") or {}
+        if str(target.get("groupId") or "") == group_id and row.get("id"):
+            return str(row["id"]), None
+
+    return None, _err_envelope(
+        summary=f"group '{group_id}' is not assigned",
+        code=ErrorCode.NOT_FOUND,
+        message=f"Could not find an assignment targeting group '{group_id}' on policy '{policy_id}'.",
+        trace_id=trace_id,
+    )
 
 
 @app.command("assign")
@@ -434,7 +544,12 @@ async def _assign_async(
     plan_flag, apply_flag = _mode_flags(plan_flag, apply_flag)
     trace_id = _new_trace_id()
 
-    pol_loc = await _resolve_id(policy, type="policy", profile=profile)
+    (pol_loc, pol_err), (grp_id, err) = await asyncio.gather(
+        _resolve_or_transport_err(policy, type="policy", profile=profile, trace_id=trace_id),
+        _resolve_or_literal(to, type="group", profile=profile, trace_id=trace_id),
+    )
+    if pol_err is not None:
+        return pol_err
     if pol_loc is None:
         return _err_envelope(
             summary=f"policy '{policy}' not found",
@@ -442,24 +557,21 @@ async def _assign_async(
             message=f"Could not resolve policy: {policy!r}.",
             trace_id=trace_id,
         )
-    grp_id, err = await _resolve_or_literal(to, type="group", profile=profile, trace_id=trace_id)
     if err is not None:
         return err
 
-    # Map policy kind → catalog entry that creates a single assignment.
-    kind = pol_loc.kind
-    if kind == "settingsCatalog":
-        # TODO(merge): add a dedicated single-assignment create entry for
-        # configurationPolicies; today we route through assign_settings_catalog_profile.
-        entry_id = "policies.assign_settings_catalog_profile"
-    elif kind == "compliance":
-        entry_id = "policies.assign_compliance_policy"
-    else:
-        entry_id = "policies.create_config_profile_assignment"
+    config = _assignment_config(pol_loc.kind)
+    if config is None:
+        return _err_envelope(
+            summary=f"policy kind '{pol_loc.kind}' is not assignable via change assign",
+            code=ErrorCode.USAGE_ERROR,
+            message="Only classic config profiles, Settings Catalog policies, and compliance policies support change assign.",
+            trace_id=trace_id,
+        )
 
-    parameters = {"profile_id": pol_loc.id, "policy_id": pol_loc.id, "group_id": grp_id}
+    parameters = {config.id_param: pol_loc.id, "group_id": grp_id}
     return await _dispatch(
-        entry_id,
+        config.create_entry_id,
         parameters,
         None,
         plan=plan_flag,
@@ -470,6 +582,12 @@ async def _assign_async(
         profile=profile,
         verb="assign",
         summary=f"assign {pol_loc.display_name or pol_loc.id} → {to}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "assign",
+            profile=profile,
+            options={"policy": policy, "to": to},
+        ),
     )
 
 
@@ -502,7 +620,12 @@ async def _unassign_async(
     plan_flag, apply_flag = _mode_flags(plan_flag, apply_flag)
     trace_id = _new_trace_id()
 
-    pol_loc = await _resolve_id(policy, type="policy", profile=profile)
+    (pol_loc, pol_err), (grp_id, err) = await asyncio.gather(
+        _resolve_or_transport_err(policy, type="policy", profile=profile, trace_id=trace_id),
+        _resolve_or_literal(from_, type="group", profile=profile, trace_id=trace_id),
+    )
+    if pol_err is not None:
+        return pol_err
     if pol_loc is None:
         return _err_envelope(
             summary=f"policy '{policy}' not found",
@@ -510,15 +633,31 @@ async def _unassign_async(
             message=f"Could not resolve policy: {policy!r}.",
             trace_id=trace_id,
         )
-    grp_id, err = await _resolve_or_literal(from_, type="group", profile=profile, trace_id=trace_id)
     if err is not None:
         return err
 
-    entry_id = "policies.delete_config_profile_assignment"
-    assignment_id = f"{pol_loc.id}_{grp_id}"
-    parameters = {"profile_id": pol_loc.id, "assignment_id": assignment_id}
+    config = _assignment_config(pol_loc.kind)
+    if config is None:
+        return _err_envelope(
+            summary=f"policy kind '{pol_loc.kind}' is not unassignable via change unassign",
+            code=ErrorCode.USAGE_ERROR,
+            message="Only classic config profiles, Settings Catalog policies, and compliance policies support change unassign.",
+            trace_id=trace_id,
+        )
+
+    assignment_id, assignment_err = await _find_assignment_id_for_group(
+        policy_id=pol_loc.id,
+        config=config,
+        group_id=grp_id,
+        profile=profile,
+        trace_id=trace_id,
+    )
+    if assignment_err is not None:
+        return assignment_err
+
+    parameters = {config.id_param: pol_loc.id, "assignment_id": assignment_id}
     return await _dispatch(
-        entry_id,
+        config.delete_entry_id,
         parameters,
         None,
         plan=plan_flag,
@@ -529,6 +668,12 @@ async def _unassign_async(
         profile=profile,
         verb="unassign",
         summary=f"unassign {pol_loc.display_name or pol_loc.id} from {from_}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "unassign",
+            profile=profile,
+            options={"policy": policy, "from": from_},
+        ),
     )
 
 
@@ -566,6 +711,12 @@ async def _sync_async(
         profile=profile,
         verb="sync",
         summary=f"sync device {device}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "sync",
+            profile=profile,
+            options={"device": device},
+        ),
     )
 
 
@@ -603,6 +754,12 @@ async def _retire_async(
         profile=profile,
         verb="retire",
         summary=f"retire device {device}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "retire",
+            profile=profile,
+            options={"device": device},
+        ),
     )
 
 
@@ -657,6 +814,14 @@ async def _wipe_async(
         profile=profile,
         verb="wipe",
         summary=f"wipe device {device}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "wipe",
+            profile=profile,
+            options={"device": device},
+            breakglass=breakglass,
+            reason=reason,
+        ),
     )
 
 
@@ -688,12 +853,14 @@ async def _group_add_async(
 ) -> Envelope:
     plan_flag, apply_flag = _mode_flags(plan_flag, apply_flag)
     trace_id = _new_trace_id()
-    usr_id, err = await _resolve_or_literal(user, type="user", profile=profile, trace_id=trace_id)
-    if err is not None:
-        return err
-    grp_id, err = await _resolve_or_literal(group, type="group", profile=profile, trace_id=trace_id)
-    if err is not None:
-        return err
+    (usr_id, err_u), (grp_id, err_g) = await asyncio.gather(
+        _resolve_or_literal(user, type="user", profile=profile, trace_id=trace_id),
+        _resolve_or_literal(group, type="group", profile=profile, trace_id=trace_id),
+    )
+    if err_u is not None:
+        return err_u
+    if err_g is not None:
+        return err_g
     return await _dispatch(
         "groups.add_member",
         {"group_id": grp_id, "member_id": usr_id},
@@ -706,6 +873,12 @@ async def _group_add_async(
         profile=profile,
         verb="group-add",
         summary=f"add {user} to group {group}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "group-add",
+            profile=profile,
+            options={"user": user, "group": group},
+        ),
     )
 
 
@@ -737,12 +910,14 @@ async def _group_remove_async(
 ) -> Envelope:
     plan_flag, apply_flag = _mode_flags(plan_flag, apply_flag)
     trace_id = _new_trace_id()
-    usr_id, err = await _resolve_or_literal(user, type="user", profile=profile, trace_id=trace_id)
-    if err is not None:
-        return err
-    grp_id, err = await _resolve_or_literal(group, type="group", profile=profile, trace_id=trace_id)
-    if err is not None:
-        return err
+    (usr_id, err_u), (grp_id, err_g) = await asyncio.gather(
+        _resolve_or_literal(user, type="user", profile=profile, trace_id=trace_id),
+        _resolve_or_literal(group, type="group", profile=profile, trace_id=trace_id),
+    )
+    if err_u is not None:
+        return err_u
+    if err_g is not None:
+        return err_g
     return await _dispatch(
         "groups.remove_member",
         {"group_id": grp_id, "member_id": usr_id},
@@ -755,6 +930,12 @@ async def _group_remove_async(
         profile=profile,
         verb="group-remove",
         summary=f"remove {user} from group {group}",
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "group-remove",
+            profile=profile,
+            options={"user": user, "group": group},
+        ),
     )
 
 
@@ -900,6 +1081,18 @@ async def _account_async(
         profile=profile,
         verb=f"account-{action}",
         summary=summary,
+        trace_id=trace_id,
+        apply_command=_apply_command(
+            "account",
+            profile=profile,
+            positional=[action],
+            options={
+                "user": user,
+                "new-password": new_password if action == "reset-password" else None,
+            },
+            breakglass=breakglass,
+            reason=reason,
+        ),
     )
 
 

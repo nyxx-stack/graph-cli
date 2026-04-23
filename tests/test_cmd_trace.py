@@ -103,6 +103,20 @@ def test_trace_list_limit_returns_most_recent(audit_dir):
     assert [row["trace_id"] for row in env["data"]] == ["trace-new", "trace-mid"]
 
 
+def test_trace_list_accepts_naive_since_timestamp(audit_dir):
+    t0 = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    recs = [
+        _base_record(t0 - timedelta(days=1), "trace-old"),
+        _base_record(t0, "trace-new"),
+    ]
+    _write_records(audit_dir, recs)
+
+    result = _invoke(cmd_trace.app, ["list", "--since", "2026-04-23T00:00:00"])
+    assert result.exit_code == 0, result.output
+    env = json.loads(result.output)
+    assert [row["trace_id"] for row in env["data"]] == ["trace-new"]
+
+
 def test_trace_latest_returns_newest_trace_id(audit_dir):
     t0 = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
     recs = [
@@ -134,6 +148,33 @@ def test_trace_show_raw_includes_http_requests(audit_dir):
     raw = _invoke(cmd_trace.app, ["show", "trace-raw", "--raw"])
     raw_env = json.loads(raw.output)
     assert raw_env["data"][0]["http_requests"] == http_requests
+
+
+def test_trace_show_renders_raw_audit_rows_with_standard_fields(audit_dir):
+    t0 = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    recs = [
+        {
+            "timestamp": t0.isoformat(),
+            "trace_id": "trace-raw-schema",
+            "operation_id": "raw",
+            "verb": "raw",
+            "mode": "apply",
+            "profile": "default",
+            "method": "PATCH",
+            "graph_url": "/users/u1",
+            "status": "success",
+            "http_status": 204,
+            "ok": True,
+        }
+    ]
+    _write_records(audit_dir, recs)
+
+    result = _invoke(cmd_trace.app, ["show", "trace-raw-schema"])
+    assert result.exit_code == 0, result.output
+    env = json.loads(result.output)
+    assert env["data"][0]["method"] == "PATCH"
+    assert env["data"][0]["path"] == "/users/u1"
+    assert env["data"][0]["status"] == 204
 
 
 def test_trace_list_filter_by_verb_and_failed(audit_dir):

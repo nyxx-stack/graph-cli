@@ -1,24 +1,11 @@
-"""Local copies of post-processing helpers from executor.py.
-
-TODO(merge): replace with real impls from executor.py (see _dedupe_rows,
-_policy_setting_status_label, _filter_policy_failure_rows, _attach_overlap_context,
-_truncate_rows in src/graphconnect/executor.py).
-"""
+"""Post-processing helpers for Intune policy-setting rows."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from graphconnect.executor import _POLICY_SETTING_STATUS_BY_CODE
 
-_POLICY_SETTING_STATUS_BY_CODE: dict[int, str] = {
-    0: "Unknown",
-    1: "NotApplicable",
-    2: "Compliant",
-    3: "Remediated",
-    4: "NonCompliant",
-    5: "Error",
-    6: "Conflict",
-}
 _POLICY_SETTING_FAILURE_STATUSES = {"Conflict", "Error", "NonCompliant"}
 _POLICY_SETTING_DEDUPE_FIELDS = ["DeviceId", "PolicyId", "SettingInstanceId", "SettingStatus"]
 _INTUNE_ERROR_HINTS = {

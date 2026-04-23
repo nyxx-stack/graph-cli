@@ -455,6 +455,11 @@ def test_raw_writes_audit_record_with_verb_raw_and_trace_id(isolated_state):
     rec = records[0]
     assert rec["verb"] == "raw"
     assert rec["trace_id"] == env.trace_id
+    assert rec["operation_id"] == "raw"
+    assert rec["method"] == "GET"
+    assert rec["graph_url"] == "/users"
+    assert rec["status"] == "success"
+    assert rec["http_status"] == 200
     assert rec["args_redacted"]["method"] == "GET"
     assert rec["args_redacted"]["path"] == "/users"
     assert rec["ok"] is True
@@ -484,6 +489,11 @@ def test_raw_plan_writes_plan_audit_record(isolated_state, tmp_path):
     plan_rec = [r for r in records if r["mode"] == "plan"][0]
     assert plan_rec["verb"] == "raw"
     assert plan_rec["trace_id"] == env.trace_id
+    assert plan_rec["operation_id"] == "raw"
+    assert plan_rec["method"] == "POST"
+    assert plan_rec["graph_url"] == "/groups"
+    assert plan_rec["status"] == "planned"
+    assert plan_rec["http_status"] is None
     assert plan_rec["args_redacted"]["method"] == "POST"
     assert plan_rec["args_redacted"]["has_body"] is True
 

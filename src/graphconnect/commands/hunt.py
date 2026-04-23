@@ -10,57 +10,11 @@ from typing import Any
 
 import typer
 
-try:  # pragma: no cover - supplied by transport agent
-    from graphconnect.transport import graph_request  # type: ignore
-    from graphconnect.transport.client import GraphTransportError  # type: ignore
-except Exception:  # pragma: no cover
-    # TODO(merge): replace with real impl from transport-builder
-    async def graph_request(*args: Any, **kwargs: Any):  # type: ignore
-        raise RuntimeError("graph_request stub: transport package not merged yet")
-
-    class GraphTransportError(RuntimeError):  # type: ignore
-        def __init__(self, message: str, *, status_code: int | None = None, body: Any = None):
-            super().__init__(message)
-            self.status_code = status_code
-            self.body = body
-
-try:  # pragma: no cover - supplied by auth agent
-    from graphconnect.auth import list_profiles  # type: ignore
-except Exception:  # pragma: no cover
-    try:
-        from graphconnect.auth.profiles import list_profiles  # type: ignore
-    except Exception:
-        # TODO(merge): replace with real impl from auth-builder
-        def list_profiles():  # type: ignore
-            return []
-
-try:
-    from graphconnect.types import Envelope, ErrorCode, ErrorPayload  # type: ignore
-except Exception:  # pragma: no cover
-    # TODO(merge): replace with real impl from envelope-builder
-    from pydantic import BaseModel, Field
-    from typing import Literal
-
-    class ErrorCode(str):  # type: ignore
-        UPSTREAM_ERROR = "upstream_error"
-        USAGE_ERROR = "usage_error"
-        NOT_FOUND = "not_found"
-
-    class ErrorPayload(BaseModel):  # type: ignore
-        code: str
-        message: str
-        hint: str | None = None
-
-    class Envelope(BaseModel):  # type: ignore
-        ok: bool
-        trace_id: str
-        mode: Literal["read", "plan", "apply", "breakglass"]
-        summary: str
-        data: list[dict[str, Any]] | None = None
-        plan: dict[str, Any] | None = None
-        warnings: list[str] = Field(default_factory=list)
-        next_actions: list[str] = Field(default_factory=list)
-        error: ErrorPayload | None = None
+from graphconnect.auth import list_profiles
+from graphconnect.output import emit
+from graphconnect.transport import graph_request
+from graphconnect.transport.client import GraphTransportError
+from graphconnect.types import Envelope, ErrorCode, ErrorPayload
 
 
 SNIPPETS_DIR = Path(__file__).resolve().parents[3] / "catalog" / "_hunts"
@@ -216,19 +170,11 @@ async def _run_hunt(
         )
     except GraphTransportError as exc:
         message, hint = _format_error(exc)
-        return Envelope(
-            ok=False,
-            trace_id=trace_id,
-            mode="read",
+        return Envelope.err(
             summary="advanced hunting query failed",
-            data=None,
+            error=ErrorPayload(code=ErrorCode.UPSTREAM_ERROR, message=message, hint=hint),
+            trace_id=trace_id,
             warnings=warnings,
-            next_actions=[],
-            error=ErrorPayload(
-                code=getattr(ErrorCode, "UPSTREAM_ERROR", "upstream_error"),
-                message=message,
-                hint=hint,
-            ),
         )
 
     results, _schema = _extract_body(getattr(response, "body", None))
@@ -243,15 +189,11 @@ async def _run_hunt(
                 f"consider narrowing the timespan or adding filters."
             )
 
-    summary = f"advanced hunting returned {len(results)} row(s) over {timespan}"
-    return Envelope(
-        ok=True,
-        trace_id=trace_id,
-        mode="read",
-        summary=summary,
+    return Envelope.ok_read(
+        summary=f"advanced hunting returned {len(results)} row(s) over {timespan}",
         data=results,
+        trace_id=trace_id,
         warnings=warnings,
-        next_actions=[],
     )
 
 
@@ -272,31 +214,18 @@ def _do_list_snippets(directory: Path | None = None) -> Envelope:
                 "path": str(path),
             }
         )
-    return Envelope(
-        ok=True,
-        trace_id=trace_id,
-        mode="read",
+    return Envelope.ok_read(
         summary=f"{len(rows)} hunt snippet(s) available",
         data=rows,
-        warnings=[],
-        next_actions=[],
+        trace_id=trace_id,
     )
 
 
 def _usage_error(message: str, *, hint: str | None = None) -> Envelope:
-    return Envelope(
-        ok=False,
-        trace_id=uuid.uuid4().hex,
-        mode="read",
+    return Envelope.err(
         summary="usage error",
-        data=None,
-        warnings=[],
-        next_actions=[],
-        error=ErrorPayload(
-            code=getattr(ErrorCode, "USAGE_ERROR", "usage_error"),
-            message=message,
-            hint=hint,
-        ),
+        error=ErrorPayload(code=ErrorCode.USAGE_ERROR, message=message, hint=hint),
+        trace_id=uuid.uuid4().hex,
     )
 
 
@@ -394,17 +323,7 @@ def register(app: typer.Typer) -> None:
             profile=profile,
             list_snippets=list_snippets,
         )
-        try:
-            from graphconnect.output import emit  # type: ignore
-
-            emit(env)
-        except Exception:
-            # TODO(merge): replace with real emit from envelope-builder
-            import json as _json
-            import sys as _sys
-
-            payload = env.model_dump() if hasattr(env, "model_dump") else env.__dict__
-            _sys.stdout.write(_json.dumps(payload, default=str) + "\n")
+        emit(env)
 
 
 __all__ = ["hunt_command", "register"]

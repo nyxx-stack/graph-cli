@@ -6,6 +6,7 @@ and emits one row per failing rule with remediation hints.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -76,17 +77,27 @@ async def run(
         )
     )
 
+    needs_fetch = [
+        p
+        for p in states
+        if str(p.get("state") or "") in _FAILING_STATES
+        and not (p.get("settingStates") or [])
+    ]
+    fetched = await asyncio.gather(
+        *(
+            graph_get(
+                f"/deviceManagement/managedDevices/{device['id']}"
+                f"/deviceCompliancePolicyStates/{p.get('id')}/settingStates",
+                profile=profile,
+            )
+            for p in needs_fetch
+        )
+    )
+    extra_states = {id(p): _values(body) for p, body in zip(needs_fetch, fetched, strict=True)}
+
     rows: list[dict[str, Any]] = []
     for policy in states:
-        setting_states = policy.get("settingStates") or []
-        if not setting_states:
-            setting_states = _values(
-                await graph_get(
-                    f"/deviceManagement/managedDevices/{device['id']}"
-                    f"/deviceCompliancePolicyStates/{policy.get('id')}/settingStates",
-                    profile=profile,
-                )
-            )
+        setting_states = policy.get("settingStates") or extra_states.get(id(policy), [])
         for s in setting_states:
             if not isinstance(s, dict):
                 continue
